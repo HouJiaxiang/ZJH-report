@@ -1,0 +1,5 @@
+{
+  "name": "ZJH-Scoreboard",
+  "description": "炸金花（ZJH）纸牌游戏的实时数字记分账本，具有房间管理、底池跟踪和下注记录功能。",
+  "requestFramePermissions": []
+}
