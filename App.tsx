@@ -55,15 +55,26 @@ const App: React.FC = () => {
     const cleanup = subscribeToRoom(
       roomId, 
       (updatedRoom) => {
-         // Check if I was kicked
-         if (!updatedRoom.players[userId]) {
-           alert('你已被移出房间。');
+         // 1. Room Deleted (Disbanded)
+         if (!updatedRoom) {
+           alert('房间已解散');
            localStorage.removeItem(SESSION_KEY);
            setGameState({ room: null, me: null });
            if (unsubscribeRef.current) unsubscribeRef.current();
            return;
          }
 
+         // 2. User Kicked or removed
+         if (!updatedRoom.players[userId]) {
+           // We might want to distinguish between "Self Left" and "Kicked", but simplest is to just reset
+           // If we triggered leaveRoom ourselves, we might have already refreshed, but this catches updates from other devices/actions
+           localStorage.removeItem(SESSION_KEY);
+           setGameState({ room: null, me: null });
+           if (unsubscribeRef.current) unsubscribeRef.current();
+           return;
+         }
+
+         // 3. Normal Update
          setGameState(prev => ({
            room: updatedRoom,
            me: updatedRoom.players[userId]
@@ -79,13 +90,17 @@ const App: React.FC = () => {
 
   const handleJoin = async (roomId: string, userId: string) => {
     // Initial fetch
-    const room = await getRoom(roomId);
-    if (room && room.players[userId]) {
-      setGameState({ room, me: room.players[userId] });
-      localStorage.setItem(SESSION_KEY, JSON.stringify({ roomId, userId }));
-      
-      // Start Realtime Listener
-      setupSubscription(roomId, userId);
+    try {
+      const room = await getRoom(roomId);
+      if (room && room.players[userId]) {
+        setGameState({ room, me: room.players[userId] });
+        localStorage.setItem(SESSION_KEY, JSON.stringify({ roomId, userId }));
+        
+        // Start Realtime Listener
+        setupSubscription(roomId, userId);
+      }
+    } catch (e: any) {
+      alert(e.message || '加入房间失败');
     }
   };
 

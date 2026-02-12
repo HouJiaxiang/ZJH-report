@@ -5,6 +5,7 @@ import { supabase } from '../lib/supabase';
 // Helper to generate IDs
 const generateId = () => Math.random().toString(36).substr(2, 9);
 const generateRoomCode = () => Math.floor(1000 + Math.random() * 9000).toString();
+const MAX_PLAYERS = 15;
 
 // --- DB Helpers ---
 
@@ -35,7 +36,7 @@ const updateRoomData = async (room: Room) => {
 
 export const createRoom = async (hostName: string, ante: number = 5): Promise<{ roomId: string; userId: string }> => {
   let roomId = generateRoomCode();
-  // Simple check to avoid collision (in production, rely on DB constraint)
+  // Simple check to avoid collision
   const existing = await fetchRoomData(roomId);
   if (existing) roomId = generateRoomCode();
 
@@ -56,7 +57,7 @@ export const createRoom = async (hostName: string, ante: number = 5): Promise<{ 
     hostId,
     status: 'waiting',
     pot: 0,
-    ante, // Initial default, but can be changed on first start
+    ante,
     roundCount: 0,
     createdAt: Date.now(),
     players: { [hostId]: hostPlayer },
@@ -81,6 +82,11 @@ export const createRoom = async (hostName: string, ante: number = 5): Promise<{ 
 export const joinRoom = async (roomId: string, nickname: string): Promise<{ userId: string }> => {
   const room = await fetchRoomData(roomId);
   if (!room) throw new Error('房间不存在');
+
+  // Check Capacity
+  if (Object.keys(room.players).length >= MAX_PLAYERS) {
+    throw new Error(`房间已满 (限 ${MAX_PLAYERS} 人)`);
+  }
 
   const userId = generateId();
   const newPlayer: Player = {
@@ -108,6 +114,63 @@ export const joinRoom = async (roomId: string, nickname: string): Promise<{ user
   return { userId };
 };
 
+export const leaveRoom = async (roomId: string, userId: string) => {
+  const room = await fetchRoomData(roomId);
+  if (!room) return;
+
+  const player = room.players[userId];
+  if (!player) return; // Player already gone
+
+  // Remove player
+  delete room.players[userId];
+
+  const remainingIds = Object.keys(room.players);
+
+  // If no players left, delete the room
+  if (remainingIds.length === 0) {
+    await disbandRoom(roomId);
+    return;
+  }
+
+  // Handle Host Transfer if necessary
+  if (player.isHost) {
+    const newHostId = remainingIds[0];
+    room.hostId = newHostId;
+    room.players[newHostId].isHost = true;
+    
+    room.logs.push({
+      id: generateId(),
+      timestamp: Date.now(),
+      userId: 'system',
+      userName: '系统',
+      action: `${player.nickname} 离开，房主转移给 ${room.players[newHostId].nickname}`,
+      type: 'system'
+    });
+  } else {
+    room.logs.push({
+      id: generateId(),
+      timestamp: Date.now(),
+      userId: 'system',
+      userName: '系统',
+      action: `${player.nickname} 离开了房间`,
+      type: 'system'
+    });
+  }
+
+  await updateRoomData(room);
+};
+
+export const disbandRoom = async (roomId: string) => {
+  // Directly delete the row from DB. 
+  // The subscription 'DELETE' event will handle notifying clients.
+  const { error } = await supabase
+    .from('rooms')
+    .delete()
+    .eq('id', roomId);
+
+  if (error) throw error;
+};
+
 export const getRoom = async (roomId: string): Promise<Room | null> => {
   return await fetchRoomData(roomId);
 };
@@ -118,7 +181,7 @@ type SubscriptionStatus = 'CONNECTING' | 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'CLOSE
 
 export const subscribeToRoom = (
   roomId: string, 
-  onUpdate: (room: Room) => void,
+  onUpdate: (room: Room | null) => void, // null means room deleted
   onStatusChange?: (status: SubscriptionStatus) => void
 ) => {
   if (onStatusChange) onStatusChange('CONNECTING');
@@ -128,19 +191,21 @@ export const subscribeToRoom = (
     .on(
       'postgres_changes',
       {
-        event: 'UPDATE',
+        event: '*', // Listen to INSERT, UPDATE, DELETE
         schema: 'public',
         table: 'rooms',
         filter: `id=eq.${roomId}`,
       },
       (payload) => {
-        if (payload.new && payload.new.content) {
+        if (payload.eventType === 'DELETE') {
+          // Room was deleted/disbanded
+          onUpdate(null);
+        } else if (payload.new && payload.new.content) {
           onUpdate(payload.new.content as Room);
         }
       }
     )
     .subscribe((status) => {
-      // Supabase status: 'SUBSCRIBED' | 'TIMED_OUT' | 'CLOSED' | 'CHANNEL_ERROR'
       console.log(`Realtime status for room ${roomId}:`, status);
       if (onStatusChange) {
         onStatusChange(status as SubscriptionStatus);
@@ -158,7 +223,6 @@ export const startRound = async (roomId: string, initialAnte?: number) => {
   const room = await fetchRoomData(roomId);
   if (!room) return;
 
-  // 如果是第一轮，且提供了新的底注，则更新底注配置
   if (room.roundCount === 0 && initialAnte) {
     room.ante = initialAnte;
   }
@@ -176,7 +240,6 @@ export const startRound = async (roomId: string, initialAnte?: number) => {
 
   room.pot += potAdd;
   
-  // Log message changes depending on whether ante was just set
   const anteMsg = (room.roundCount === 1 && initialAnte) ? ` (底注设为 ${initialAnte})` : '';
 
   room.logs.push({

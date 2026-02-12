@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Room, Player } from '../types';
-import { startRound, placeBet, fold, lookAtCards, settleRound, transferCredits } from '../services/gameService';
+import { startRound, placeBet, fold, lookAtCards, settleRound, transferCredits, leaveRoom, disbandRoom } from '../services/gameService';
 import { PotDisplay } from './PotDisplay';
 import { PlayerCard } from './PlayerCard';
 import { Controls } from './Controls';
 import { Modal } from './Modal';
 import { Button } from './Button';
-import { Copy, Check, Users, Wifi, WifiOff, Settings } from 'lucide-react';
+import { Copy, Check, Users, Wifi, WifiOff, Settings, LogOut, AlertTriangle } from 'lucide-react';
 
 interface GameRoomProps {
   room: Room;
@@ -18,7 +18,9 @@ export const GameRoom: React.FC<GameRoomProps> = ({ room, me, connectionStatus }
   const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
   const [transferAmount, setTransferAmount] = useState<string>('');
   const [showSettleModal, setShowSettleModal] = useState(false);
+  const [showExitModal, setShowExitModal] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [isProcessingExit, setIsProcessingExit] = useState(false);
 
   // Sorting players: Me first, then others
   const playersList = Object.values(room.players) as Player[];
@@ -48,6 +50,32 @@ export const GameRoom: React.FC<GameRoomProps> = ({ room, me, connectionStatus }
   const handleSettle = async (winnerId: string) => {
     await settleRound(room.id, winnerId);
     setShowSettleModal(false);
+  };
+
+  const handleLeave = async () => {
+    setIsProcessingExit(true);
+    try {
+      await leaveRoom(room.id, me.id);
+      // App.tsx will handle the session cleanup when it detects user is missing from room
+      // or we can manually clear here, but safer to let subscription handle "kicked" logic if preferred.
+      // However, for immediate UX, we usually let App.tsx handle it.
+      // But to be sure:
+      window.location.reload(); // Hard reset is simplest way to return to lobby without state ghosts
+    } catch (e) {
+      console.error(e);
+      setIsProcessingExit(false);
+    }
+  };
+
+  const handleDisband = async () => {
+    setIsProcessingExit(true);
+    try {
+      await disbandRoom(room.id);
+      // App.tsx handles the "room deleted" event
+    } catch (e) {
+      console.error(e);
+      setIsProcessingExit(false);
+    }
   };
 
   const copyRoomId = () => {
@@ -104,21 +132,31 @@ export const GameRoom: React.FC<GameRoomProps> = ({ room, me, connectionStatus }
             </div>
           </div>
 
-          <div className="flex flex-col items-end gap-1">
-            {/* Ante Display */}
-            <div className="flex items-center gap-1.5 bg-slate-800/80 px-2 py-0.5 rounded border border-slate-700/50">
-               <Settings size={10} className="text-slate-500" />
-               <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">底注:</span>
-               <span className="text-xs font-mono font-bold text-amber-500">{room.ante}</span>
+          <div className="flex gap-2">
+            <div className="flex flex-col items-end gap-1">
+              {/* Ante Display */}
+              <div className="flex items-center gap-1.5 bg-slate-800/80 px-2 py-0.5 rounded border border-slate-700/50">
+                <Settings size={10} className="text-slate-500" />
+                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">底注:</span>
+                <span className="text-xs font-mono font-bold text-amber-500">{room.ante}</span>
+              </div>
+
+              {/* My Balance */}
+              <div className="flex flex-col items-end">
+                  <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">我的资产</span>
+                  <span className={`font-mono font-bold text-lg leading-none ${me.balance >= 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
+                    {me.balance > 0 ? '+' : ''}{me.balance}
+                  </span>
+              </div>
             </div>
 
-            {/* My Balance */}
-             <div className="flex flex-col items-end">
-                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">我的资产</span>
-                <span className={`font-mono font-bold text-lg leading-none ${me.balance >= 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
-                  {me.balance > 0 ? '+' : ''}{me.balance}
-                </span>
-             </div>
+            {/* Exit Button */}
+            <button 
+              onClick={() => setShowExitModal(true)}
+              className="ml-1 self-center bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 p-2.5 rounded-xl border border-slate-700 transition-all"
+            >
+              <LogOut size={18} />
+            </button>
           </div>
         </div>
         
@@ -221,6 +259,68 @@ export const GameRoom: React.FC<GameRoomProps> = ({ room, me, connectionStatus }
                </div>
              </button>
             ))}
+          </div>
+        </div>
+      </Modal>
+
+      {/* Exit/Disband Modal */}
+      <Modal
+        isOpen={showExitModal}
+        onClose={() => setShowExitModal(false)}
+        title={me.isHost ? "管理房间" : "退出房间"}
+      >
+        <div className="space-y-4">
+          <div className="bg-slate-950 p-4 rounded-lg flex items-start gap-3 border border-slate-800">
+            <AlertTriangle className="text-amber-500 shrink-0" size={24} />
+            <div>
+              <p className="text-sm text-slate-300">
+                {me.isHost 
+                  ? "你是房主。你可以选择解散房间（所有人退出）或仅自己离开（房主权限将顺延给下一位玩家）。" 
+                  : "确定要退出当前房间吗？你的战绩将会保留在当前战局中。"
+                }
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-3">
+            {me.isHost ? (
+              <>
+                 <Button 
+                   variant="danger" 
+                   fullWidth 
+                   size="lg" 
+                   onClick={handleDisband}
+                   disabled={isProcessingExit}
+                  >
+                   💥 解散房间 (所有人退出)
+                 </Button>
+                 <Button 
+                   variant="secondary" 
+                   fullWidth 
+                   size="lg" 
+                   onClick={handleLeave}
+                   disabled={isProcessingExit}
+                  >
+                   👋 仅自己离开 (转移房主)
+                 </Button>
+              </>
+            ) : (
+              <Button 
+                variant="danger" 
+                fullWidth 
+                size="lg" 
+                onClick={handleLeave}
+                disabled={isProcessingExit}
+              >
+                退出房间
+              </Button>
+            )}
+            <button 
+              onClick={() => setShowExitModal(false)} 
+              className="text-slate-500 text-sm py-2 hover:text-white"
+            >
+              取消
+            </button>
           </div>
         </div>
       </Modal>
