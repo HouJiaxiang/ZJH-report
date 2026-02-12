@@ -6,7 +6,7 @@ import { PlayerCard } from './PlayerCard';
 import { Controls } from './Controls';
 import { Modal } from './Modal';
 import { Button } from './Button';
-import { Copy, Check, Users, Wifi, WifiOff } from 'lucide-react';
+import { Copy, Check, Users, Wifi, WifiOff, Settings } from 'lucide-react';
 
 interface GameRoomProps {
   room: Room;
@@ -93,21 +93,26 @@ export const GameRoom: React.FC<GameRoomProps> = ({ room, me, connectionStatus }
               </div>
             </button>
             
-            {/* Connection Status Indicator */}
-            <div className="flex items-center gap-1.5 ml-1">
-              {getConnectionIcon()}
-              <span className={`text-[10px] font-medium ${connectionStatus === 'SUBSCRIBED' ? 'text-emerald-500/70' : 'text-slate-500'}`}>
-                {getConnectionText()}
-              </span>
+            {/* Connection Status & Ante Info */}
+            <div className="flex items-center gap-2 ml-1">
+              <div className="flex items-center gap-1.5">
+                {getConnectionIcon()}
+                <span className={`text-[10px] font-medium ${connectionStatus === 'SUBSCRIBED' ? 'text-emerald-500/70' : 'text-slate-500'}`}>
+                  {getConnectionText()}
+                </span>
+              </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
-             <div className="flex items-center gap-1.5 text-slate-500 bg-slate-800/50 px-2 py-1 rounded">
-                <Users size={14} />
-                <span className="text-xs font-mono">{playersList.length}</span>
-             </div>
-             
+          <div className="flex flex-col items-end gap-1">
+            {/* Ante Display */}
+            <div className="flex items-center gap-1.5 bg-slate-800/80 px-2 py-0.5 rounded border border-slate-700/50">
+               <Settings size={10} className="text-slate-500" />
+               <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">底注:</span>
+               <span className="text-xs font-mono font-bold text-amber-500">{room.ante}</span>
+            </div>
+
+            {/* My Balance */}
              <div className="flex flex-col items-end">
                 <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">我的资产</span>
                 <span className={`font-mono font-bold text-lg leading-none ${me.balance >= 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
@@ -116,7 +121,15 @@ export const GameRoom: React.FC<GameRoomProps> = ({ room, me, connectionStatus }
              </div>
           </div>
         </div>
-        <PotDisplay pot={room.pot} logs={room.logs} roundCount={room.roundCount} />
+        
+        {/* Pot Display with Settle Button */}
+        <PotDisplay 
+          pot={room.pot} 
+          logs={room.logs} 
+          roundCount={room.roundCount} 
+          isHost={me.isHost}
+          onSettle={room.status === 'playing' ? () => setShowSettleModal(true) : undefined}
+        />
       </div>
 
       {/* Grid */}
@@ -135,10 +148,11 @@ export const GameRoom: React.FC<GameRoomProps> = ({ room, me, connectionStatus }
       <Controls 
         player={me}
         roomStatus={room.status}
+        roundCount={room.roundCount}
         onBet={(amount) => placeBet(room.id, me.id, amount)}
         onFold={() => fold(room.id, me.id)}
         onLook={() => lookAtCards(room.id, me.id)}
-        onStartRound={() => startRound(room.id)}
+        onStartRound={(ante) => startRound(room.id, ante)}
         onSettle={() => setShowSettleModal(true)}
       />
 

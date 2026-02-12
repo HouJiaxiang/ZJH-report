@@ -56,7 +56,7 @@ export const createRoom = async (hostName: string, ante: number = 5): Promise<{ 
     hostId,
     status: 'waiting',
     pot: 0,
-    ante,
+    ante, // Initial default, but can be changed on first start
     roundCount: 0,
     createdAt: Date.now(),
     players: { [hostId]: hostPlayer },
@@ -154,9 +154,14 @@ export const subscribeToRoom = (
 
 // --- Game Actions ---
 
-export const startRound = async (roomId: string) => {
+export const startRound = async (roomId: string, initialAnte?: number) => {
   const room = await fetchRoomData(roomId);
   if (!room) return;
+
+  // 如果是第一轮，且提供了新的底注，则更新底注配置
+  if (room.roundCount === 0 && initialAnte) {
+    room.ante = initialAnte;
+  }
 
   room.status = 'playing';
   room.roundCount += 1;
@@ -170,12 +175,16 @@ export const startRound = async (roomId: string) => {
   });
 
   room.pot += potAdd;
+  
+  // Log message changes depending on whether ante was just set
+  const anteMsg = (room.roundCount === 1 && initialAnte) ? ` (底注设为 ${initialAnte})` : '';
+
   room.logs.push({
     id: generateId(),
     timestamp: Date.now(),
     userId: 'system',
     userName: '系统',
-    action: `第 ${room.roundCount} 轮开始，已扣底注`,
+    action: `第 ${room.roundCount} 轮开始，已扣底注${anteMsg}`,
     type: 'system'
   });
 

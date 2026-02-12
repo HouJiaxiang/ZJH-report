@@ -2,21 +2,26 @@ import React, { useState } from 'react';
 import { Player, RoomStatus } from '../types';
 import { Button } from './Button';
 import { BET_AMOUNTS } from '../constants';
-import { Eye, X, DollarSign, ChevronUp, Crown } from 'lucide-react';
+import { Eye, X, DollarSign, ChevronUp, Crown, Settings } from 'lucide-react';
+import { Modal } from './Modal';
 
 interface ControlsProps {
   player: Player;
   roomStatus: RoomStatus;
+  roundCount: number;
   onBet: (amount: number) => void;
   onFold: () => void;
   onLook: () => void;
-  onStartRound?: () => void;
+  onStartRound?: (ante?: number) => void;
   onSettle?: () => void;
 }
+
+const ANTE_OPTIONS = [1, 2, 5, 10];
 
 export const Controls: React.FC<ControlsProps> = ({ 
   player, 
   roomStatus, 
+  roundCount,
   onBet, 
   onFold, 
   onLook,
@@ -25,6 +30,10 @@ export const Controls: React.FC<ControlsProps> = ({
 }) => {
   const [showBetMenu, setShowBetMenu] = useState(false);
   const [customBet, setCustomBet] = useState('');
+  
+  // Host Start Game State
+  const [showStartMenu, setShowStartMenu] = useState(false);
+  const [selectedAnte, setSelectedAnte] = useState(1); // Default to 1
 
   const handleCustomBet = () => {
     const amount = parseInt(customBet);
@@ -35,20 +44,77 @@ export const Controls: React.FC<ControlsProps> = ({
     }
   };
 
+  const handleHostStartClick = () => {
+    // If it's the very first round (roundCount === 0), show setting menu
+    if (roundCount === 0) {
+      setShowStartMenu(true);
+    } else {
+      // Otherwise just start next round with existing settings
+      if (onStartRound) onStartRound();
+    }
+  };
+
+  const confirmStartGame = () => {
+    if (onStartRound) {
+      onStartRound(selectedAnte);
+      setShowStartMenu(false);
+    }
+  };
+
   // Host Controls (Waiting State)
   if (roomStatus === 'waiting' && player.isHost) {
     return (
-      <div className="fixed bottom-0 left-0 right-0 p-4 bg-slate-900 border-t border-slate-800 z-40">
-        <Button onClick={onStartRound} fullWidth size="lg" className="shadow-lg shadow-amber-900/20">
-          开始下一轮
-        </Button>
-      </div>
+      <>
+        <div className="fixed bottom-0 left-0 right-0 p-4 bg-slate-900 border-t border-slate-800 z-40">
+          <Button onClick={handleHostStartClick} fullWidth size="lg" className="shadow-lg shadow-amber-900/20">
+            {roundCount === 0 ? '设置底注并开始' : '开始下一轮'}
+          </Button>
+        </div>
+
+        {/* Ante Selection Modal (Only for Round 0) */}
+        <Modal
+          isOpen={showStartMenu}
+          onClose={() => setShowStartMenu(false)}
+          title="设置本局底注"
+        >
+          <div className="space-y-6">
+            <div className="bg-amber-500/10 border border-amber-500/20 p-4 rounded-lg">
+              <p className="text-amber-200 text-sm flex items-start gap-2">
+                <Settings size={16} className="mt-0.5 shrink-0" />
+                 请选择每轮自动扣除的底注金额。游戏开始后将无法更改此设置。
+              </p>
+            </div>
+
+            <div className="grid grid-cols-4 gap-3">
+              {ANTE_OPTIONS.map(ante => (
+                <button
+                  key={ante}
+                  onClick={() => setSelectedAnte(ante)}
+                  className={`
+                    py-4 rounded-xl font-mono font-bold text-lg border-2 transition-all
+                    ${selectedAnte === ante 
+                      ? 'bg-amber-500 border-amber-500 text-white shadow-[0_0_15px_rgba(245,158,11,0.4)]' 
+                      : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'
+                    }
+                  `}
+                >
+                  {ante}
+                </button>
+              ))}
+            </div>
+
+            <Button fullWidth onClick={confirmStartGame} size="lg">
+              确定开始 (底注: {selectedAnte})
+            </Button>
+          </div>
+        </Modal>
+      </>
     );
   }
 
-  // Host Controls (Playing State - Settle)
+  // Host Controls (Playing State - Host Folded)
+  // Replaces bottom bar with Settle button if host has folded, as they have no other actions
   if (roomStatus === 'playing' && player.isHost && player.status === 'folded') {
-     // If host is folded, they can still settle.
      return (
         <div className="fixed bottom-0 left-0 right-0 p-4 bg-slate-900 border-t border-slate-800 z-40">
            <Button variant="ghost" onClick={onSettle} fullWidth size="lg" className="text-amber-500 border border-amber-900/30 bg-slate-800/50">
@@ -68,11 +134,12 @@ export const Controls: React.FC<ControlsProps> = ({
     );
   }
 
-  // Active Player Controls
+  // Active Player Controls (Folded State)
   if (player.status === 'folded') {
     return (
       <div className="fixed bottom-0 left-0 right-0 p-6 text-center bg-slate-900 border-t border-slate-800 text-slate-500">
         你已弃牌。
+        {/* Host redundant button here just in case they missed the top one, but simplified */}
         {player.isHost && (
             <div className="mt-4">
                 <Button variant="secondary" size="lg" fullWidth onClick={onSettle} className="text-amber-500">
@@ -166,18 +233,6 @@ export const Controls: React.FC<ControlsProps> = ({
           </div>
         )}
       </div>
-      
-      {/* Floating Settle Button for Host if playing */}
-      {player.isHost && (
-          <div className="fixed top-20 right-4 z-30">
-               <button 
-                onClick={onSettle} 
-                className="bg-slate-900/90 backdrop-blur-md text-sm font-bold text-amber-500 border border-amber-500/50 px-5 py-3 rounded-full flex items-center gap-2 hover:bg-slate-800 shadow-xl shadow-amber-900/20 active:scale-95 transition-all"
-               >
-                    <Crown size={18} className="fill-current"/> 结算本局
-               </button>
-          </div>
-      )}
     </>
   );
 };
