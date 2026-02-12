@@ -1,28 +1,43 @@
-import { Room, Player, LogEntry, PlayerStatus } from '../types';
-import { STORAGE_KEY, AVATARS } from '../constants';
+import { Room, Player, LogEntry } from '../types';
+import { AVATARS } from '../constants';
+import { supabase } from '../lib/supabase';
 
 // Helper to generate IDs
 const generateId = () => Math.random().toString(36).substr(2, 9);
 const generateRoomCode = () => Math.floor(1000 + Math.random() * 9000).toString();
 
-// Low-level DB access
-const getDb = (): Record<string, Room> => {
-  const data = localStorage.getItem(STORAGE_KEY);
-  return data ? JSON.parse(data) : {};
+// --- DB Helpers ---
+
+const fetchRoomData = async (roomId: string): Promise<Room | null> => {
+  const { data, error } = await supabase
+    .from('rooms')
+    .select('content')
+    .eq('id', roomId)
+    .single();
+
+  if (error || !data) return null;
+  return data.content as Room;
 };
 
-const saveDb = (db: Record<string, Room>) => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+const updateRoomData = async (room: Room) => {
+  const { error } = await supabase
+    .from('rooms')
+    .update({ content: room, updated_at: new Date() })
+    .eq('id', room.id);
+  
+  if (error) {
+    console.error('Error updating room:', error);
+    throw new Error('Sync failed');
+  }
 };
 
 // --- Service Methods ---
 
 export const createRoom = async (hostName: string, ante: number = 5): Promise<{ roomId: string; userId: string }> => {
-  const db = getDb();
   let roomId = generateRoomCode();
-  while (db[roomId]) {
-    roomId = generateRoomCode();
-  }
+  // Simple check to avoid collision (in production, rely on DB constraint)
+  const existing = await fetchRoomData(roomId);
+  if (existing) roomId = generateRoomCode();
 
   const hostId = generateId();
   const hostPlayer: Player = {
@@ -55,15 +70,17 @@ export const createRoom = async (hostName: string, ante: number = 5): Promise<{ 
     }],
   };
 
-  db[roomId] = newRoom;
-  saveDb(db);
+  const { error } = await supabase
+    .from('rooms')
+    .insert([{ id: roomId, content: newRoom }]);
+
+  if (error) throw error;
   return { roomId, userId: hostId };
 };
 
 export const joinRoom = async (roomId: string, nickname: string): Promise<{ userId: string }> => {
-  const db = getDb();
-  const room = db[roomId];
-  if (!room) throw new Error('Room not found');
+  const room = await fetchRoomData(roomId);
+  if (!room) throw new Error('房间不存在');
 
   const userId = generateId();
   const newPlayer: Player = {
@@ -87,20 +104,58 @@ export const joinRoom = async (roomId: string, nickname: string): Promise<{ user
     type: 'system'
   });
 
-  saveDb(db);
+  await updateRoomData(room);
   return { userId };
 };
 
-export const getRoom = (roomId: string): Room | null => {
-  const db = getDb();
-  return db[roomId] || null;
+export const getRoom = async (roomId: string): Promise<Room | null> => {
+  return await fetchRoomData(roomId);
+};
+
+// --- Realtime Subscription ---
+
+type SubscriptionStatus = 'CONNECTING' | 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'CLOSED';
+
+export const subscribeToRoom = (
+  roomId: string, 
+  onUpdate: (room: Room) => void,
+  onStatusChange?: (status: SubscriptionStatus) => void
+) => {
+  if (onStatusChange) onStatusChange('CONNECTING');
+
+  const channel = supabase
+    .channel(`room-${roomId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'rooms',
+        filter: `id=eq.${roomId}`,
+      },
+      (payload) => {
+        if (payload.new && payload.new.content) {
+          onUpdate(payload.new.content as Room);
+        }
+      }
+    )
+    .subscribe((status) => {
+      // Supabase status: 'SUBSCRIBED' | 'TIMED_OUT' | 'CLOSED' | 'CHANNEL_ERROR'
+      console.log(`Realtime status for room ${roomId}:`, status);
+      if (onStatusChange) {
+        onStatusChange(status as SubscriptionStatus);
+      }
+    });
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
 };
 
 // --- Game Actions ---
 
 export const startRound = async (roomId: string) => {
-  const db = getDb();
-  const room = db[roomId];
+  const room = await fetchRoomData(roomId);
   if (!room) return;
 
   room.status = 'playing';
@@ -108,8 +163,6 @@ export const startRound = async (roomId: string) => {
   let potAdd = 0;
 
   Object.values(room.players).forEach(p => {
-    // Only active players pay ante? Or everyone? Assuming everyone who isn't busted/offline
-    // Implementation: Reset everyone to active and blind, deduct ante
     p.status = 'active';
     p.cardStatus = 'blind';
     p.balance -= room.ante;
@@ -126,12 +179,11 @@ export const startRound = async (roomId: string) => {
     type: 'system'
   });
 
-  saveDb(db);
+  await updateRoomData(room);
 };
 
 export const placeBet = async (roomId: string, userId: string, amount: number) => {
-  const db = getDb();
-  const room = db[roomId];
+  const room = await fetchRoomData(roomId);
   if (!room) return;
   const player = room.players[userId];
   if (!player) return;
@@ -149,12 +201,11 @@ export const placeBet = async (roomId: string, userId: string, amount: number) =
     type: 'bet'
   });
 
-  saveDb(db);
+  await updateRoomData(room);
 };
 
 export const fold = async (roomId: string, userId: string) => {
-  const db = getDb();
-  const room = db[roomId];
+  const room = await fetchRoomData(roomId);
   if (!room) return;
   const player = room.players[userId];
   if (!player) return;
@@ -170,12 +221,11 @@ export const fold = async (roomId: string, userId: string) => {
     type: 'fold'
   });
 
-  saveDb(db);
+  await updateRoomData(room);
 };
 
 export const lookAtCards = async (roomId: string, userId: string) => {
-  const db = getDb();
-  const room = db[roomId];
+  const room = await fetchRoomData(roomId);
   if (!room) return;
   const player = room.players[userId];
   if (!player) return;
@@ -190,13 +240,12 @@ export const lookAtCards = async (roomId: string, userId: string) => {
       action: `${player.nickname} 看牌`,
       type: 'look'
     });
-    saveDb(db);
+    await updateRoomData(room);
   }
 };
 
 export const settleRound = async (roomId: string, winnerId: string) => {
-  const db = getDb();
-  const room = db[roomId];
+  const room = await fetchRoomData(roomId);
   if (!room) return;
   const winner = room.players[winnerId];
   if (!winner) return;
@@ -216,12 +265,11 @@ export const settleRound = async (roomId: string, winnerId: string) => {
     type: 'win'
   });
 
-  saveDb(db);
+  await updateRoomData(room);
 };
 
 export const transferCredits = async (roomId: string, fromId: string, toId: string, amount: number) => {
-  const db = getDb();
-  const room = db[roomId];
+  const room = await fetchRoomData(roomId);
   if (!room) return;
   const sender = room.players[fromId];
   const receiver = room.players[toId];
@@ -240,5 +288,5 @@ export const transferCredits = async (roomId: string, fromId: string, toId: stri
     type: 'transfer'
   });
 
-  saveDb(db);
+  await updateRoomData(room);
 };

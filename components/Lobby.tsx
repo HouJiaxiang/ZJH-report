@@ -22,11 +22,22 @@ export const Lobby: React.FC<LobbyProps> = ({ onJoin }) => {
   const handleCreate = async () => {
     if (!name) return setError('请输入昵称');
     setLoading(true);
+    setError('');
     try {
       const { roomId, userId } = await createRoom(name);
       onJoin(roomId, userId);
-    } catch (e) {
-      setError('创建房间失败');
+    } catch (e: any) {
+      console.error('Create room failed:', e);
+      let msg = e.message || '创建房间失败';
+      
+      // 翻译常见的数据库错误，帮助用户排查
+      if (msg.includes('relation "rooms" does not exist')) {
+        msg = '错误：数据库表 "rooms" 不存在。请去 Supabase SQL Editor 运行建表脚本。';
+      } else if (msg.includes('row-level security')) {
+        msg = '错误：权限不足。请在 Supabase 中对 rooms 表关闭 RLS (Disable RLS)。';
+      }
+      
+      setError(msg);
     } finally {
       setLoading(false);
     }
@@ -36,21 +47,28 @@ export const Lobby: React.FC<LobbyProps> = ({ onJoin }) => {
     if (!name) return setError('请先输入昵称');
     if (roomCode.length !== 4) return setError('无效的房间号');
     
-    const room = getRoom(roomCode);
-    if (!room) return setError('找不到房间');
-    
-    setPreviewRoom(room);
-    setShowPreview(true);
+    setError('');
+    try {
+      const room = await getRoom(roomCode);
+      if (!room) return setError('找不到房间');
+      
+      setPreviewRoom(room);
+      setShowPreview(true);
+    } catch (e: any) {
+      console.error('Preview room failed:', e);
+      setError(e.message || '查找房间出错');
+    }
   };
 
   const handleConfirmJoin = async () => {
     if (!previewRoom) return;
     setLoading(true);
+    setError('');
     try {
       const { userId } = await joinRoom(previewRoom.id, name);
       onJoin(previewRoom.id, userId);
-    } catch (e) {
-      setError('加入房间失败');
+    } catch (e: any) {
+      setError(e.message || '加入房间失败');
     } finally {
       setLoading(false);
       setShowPreview(false);
@@ -71,13 +89,13 @@ export const Lobby: React.FC<LobbyProps> = ({ onJoin }) => {
           {/* Tabs */}
           <div className="flex gap-2 p-1 bg-slate-950/50 rounded-lg mb-6">
             <button 
-              onClick={() => setActiveTab('join')}
+              onClick={() => { setActiveTab('join'); setError(''); }}
               className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${activeTab === 'join' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-500 hover:text-slate-300'}`}
             >
               加入房间
             </button>
             <button 
-              onClick={() => setActiveTab('create')}
+              onClick={() => { setActiveTab('create'); setError(''); }}
               className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${activeTab === 'create' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-500 hover:text-slate-300'}`}
             >
               创建房间
@@ -110,7 +128,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onJoin }) => {
               </div>
             )}
 
-            {error && <div className="text-rose-500 text-sm text-center">{error}</div>}
+            {error && <div className="p-3 rounded-lg bg-rose-950/50 border border-rose-900/50 text-rose-400 text-xs text-center leading-relaxed font-medium">{error}</div>}
 
             <Button 
               fullWidth 

@@ -6,16 +6,19 @@ import { PlayerCard } from './PlayerCard';
 import { Controls } from './Controls';
 import { Modal } from './Modal';
 import { Button } from './Button';
+import { Copy, Check, Users, Wifi, WifiOff } from 'lucide-react';
 
 interface GameRoomProps {
   room: Room;
   me: Player;
+  connectionStatus: 'CONNECTING' | 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'CLOSED';
 }
 
-export const GameRoom: React.FC<GameRoomProps> = ({ room, me }) => {
+export const GameRoom: React.FC<GameRoomProps> = ({ room, me, connectionStatus }) => {
   const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
   const [transferAmount, setTransferAmount] = useState<string>('');
   const [showSettleModal, setShowSettleModal] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   // Sorting players: Me first, then others
   const playersList = Object.values(room.players) as Player[];
@@ -23,6 +26,8 @@ export const GameRoom: React.FC<GameRoomProps> = ({ room, me }) => {
     ...playersList.filter(p => p.id === me.id),
     ...playersList.filter(p => p.id !== me.id)
   ];
+
+  const activePlayers = playersList.filter(p => p.status !== 'folded');
 
   const handlePlayerClick = (playerId: string) => {
     if (playerId !== me.id) {
@@ -45,22 +50,70 @@ export const GameRoom: React.FC<GameRoomProps> = ({ room, me }) => {
     setShowSettleModal(false);
   };
 
-  const activePlayers = playersList.filter(p => p.status !== 'folded');
+  const copyRoomId = () => {
+    navigator.clipboard.writeText(room.id);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  // Connection Status UI Helpers
+  const getConnectionIcon = () => {
+    switch (connectionStatus) {
+      case 'SUBSCRIBED':
+        return <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)] animate-pulse"></div>;
+      case 'CONNECTING':
+        return <div className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></div>;
+      default:
+        return <div className="w-2 h-2 rounded-full bg-rose-500"></div>;
+    }
+  };
+  
+  const getConnectionText = () => {
+    if (connectionStatus === 'SUBSCRIBED') return '实时同步中';
+    if (connectionStatus === 'CONNECTING') return '连接中...';
+    return '连接断开';
+  };
 
   return (
     <div className="min-h-screen bg-slate-950 pb-24">
       {/* Top Header */}
       <div className="sticky top-0 z-30">
-        <div className="bg-slate-950 px-4 py-2 flex justify-between items-center border-b border-slate-800">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-mono text-slate-500">房间</span>
-            <span className="text-lg font-mono font-bold text-white">{room.id}</span>
+        <div className="bg-slate-900/95 backdrop-blur-sm px-4 py-3 flex justify-between items-center border-b border-slate-800 shadow-lg">
+          <div className="flex flex-col gap-1">
+            <button 
+              onClick={copyRoomId}
+              className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 transition-colors px-3 py-1.5 rounded-lg border border-slate-700 active:scale-95"
+            >
+              <div className="flex flex-col items-start">
+                <span className="text-[10px] uppercase text-slate-500 font-bold tracking-wider">房间号</span>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xl font-mono font-bold text-amber-500 tracking-wider">{room.id}</span>
+                  {copied ? <Check size={14} className="text-emerald-500" /> : <Copy size={14} className="text-slate-400" />}
+                </div>
+              </div>
+            </button>
+            
+            {/* Connection Status Indicator */}
+            <div className="flex items-center gap-1.5 ml-1">
+              {getConnectionIcon()}
+              <span className={`text-[10px] font-medium ${connectionStatus === 'SUBSCRIBED' ? 'text-emerald-500/70' : 'text-slate-500'}`}>
+                {getConnectionText()}
+              </span>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-500">我:</span>
-            <span className={`font-mono font-bold ${me.balance >= 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
-              {me.balance > 0 ? '+' : ''}{me.balance}
-            </span>
+
+          <div className="flex items-center gap-4">
+             <div className="flex items-center gap-1.5 text-slate-500 bg-slate-800/50 px-2 py-1 rounded">
+                <Users size={14} />
+                <span className="text-xs font-mono">{playersList.length}</span>
+             </div>
+             
+             <div className="flex flex-col items-end">
+                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">我的资产</span>
+                <span className={`font-mono font-bold text-lg leading-none ${me.balance >= 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
+                  {me.balance > 0 ? '+' : ''}{me.balance}
+                </span>
+             </div>
           </div>
         </div>
         <PotDisplay pot={room.pot} logs={room.logs} roundCount={room.roundCount} />
