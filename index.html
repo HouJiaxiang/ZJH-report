@@ -27,13 +27,29 @@
         },
       }
     </script>
+    <!-- 全局错误捕捉: 防止白屏无提示 -->
+    <script>
+      window.addEventListener('error', function(event) {
+        const root = document.getElementById('root');
+        if (root && root.innerHTML.trim() === '') {
+          root.innerHTML = `
+            <div style="color: #f87171; background: #2c0b0e; padding: 20px; font-family: monospace; height: 100vh; display: flex; flex-direction: column; justify-content: center; text-align: center;">
+              <h2 style="font-size: 20px; margin-bottom: 10px;">⚠️ 应用启动失败</h2>
+              <p style="color: #fca5a5;">${event.message}</p>
+              <p style="font-size: 12px; color: #999; margin-top: 20px;">请检查控制台 (F12) 获取更多细节</p>
+            </div>
+          `;
+        }
+      });
+    </script>
   <script type="importmap">
 {
   "imports": {
-    "react/": "https://esm.sh/react@^19.2.4/",
-    "react": "https://esm.sh/react@^19.2.4",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.4/",
-    "lucide-react": "https://esm.sh/lucide-react@^0.563.0",
+    "react/": "https://esm.sh/react@18.2.0/",
+    "react": "https://esm.sh/react@18.2.0",
+    "react-dom/": "https://esm.sh/react-dom@18.2.0/",
+    "react-dom": "https://esm.sh/react-dom@18.2.0",
+    "lucide-react": "https://esm.sh/lucide-react@0.263.1",
     "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.39.3"
   }
 }
@@ -41,5 +57,7 @@
 </head>
   <body class="bg-slate-950 text-gray-100 overflow-hidden">
     <div id="root"></div>
+    <!-- 🟢 关键修复: 添加 JS 入口文件 -->
+    <script type="module" src="/index.tsx"></script>
   </body>
 </html>
