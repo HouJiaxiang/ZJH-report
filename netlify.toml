@@ -1,0 +1,8 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+# Public browser configuration, restricted to production builds.
+[context.production.environment]
+  VITE_SUPABASE_URL = "https://mqhsjvhybslpofgyneol.supabase.co"
+  VITE_SUPABASE_ANON_KEY = "sb_publishable_pVBwQScnusWwcubNeu7i0A_cDMZkd1R"

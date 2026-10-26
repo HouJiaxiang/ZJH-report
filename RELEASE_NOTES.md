@@ -1,4 +1,12 @@
-# Atomic scoring and member controls (draft, not deployed)
+# Atomic scoring and member controls
+
+## Release status (2026-10-26)
+
+- The owner authorized production deployment and deletion of all legacy game data. Nine legacy rooms were deleted; platform accounts and hosting configuration were preserved.
+- Supabase anonymous sign-ins are enabled. All three source migrations below were applied together in one transaction, recorded as `20261026074319_atomic_scoring_identity_bounded_history_release`. Do not reapply the three files to this already-migrated project.
+- Live API tests passed with real anonymous sessions: 20 concurrent bets, retry deduplication, score conservation, transfer, settlement, rename, kick, outsider history denial, and 27 correctly attributed history records. Disposable test rooms and their receipts were removed.
+- PR #1 was merged as `14132a3a025b82c19d8f2cb379da8f85cb5d4b62`. The initial Netlify release built without its client configuration; `netlify.toml` now explicitly supplies the non-secret public URL and publishable key only for production. Preview configuration remains separate. Verify the subsequent production deploy and live page before announcing completion.
+- Local tests: 31 passed, typecheck and build passed. This release was approved directly for production rather than an isolated hosted staging project. Mainland phone/WeChat latency and long-running real-device Realtime tests remain unverified.
 
 ## Diagnosis
 
@@ -24,9 +32,9 @@
 - The top announcement is a keyboard-accessible button opening the same recent-history modal. Each record shows its timestamp and operator, including who started a round; bet and transfer messages retain amounts and recipients. The existing history entry remains available.
 - The third migration backfills verified protocol-2 history before compacting it, retaining original event IDs and retry receipts. Legacy rooms remain untouched. Invalid/duplicate receipts abort the migration for investigation, rather than silently discarding history.
 
-## Production blockers
+## Pre-release checklist (historical)
 
-**Do not apply this migration to production or merge until these are resolved.**
+The following was the draft checklist. The release status above supersedes its deployment and legacy-data statements. The owner explicitly chose deletion rather than backup/carry-over; outstanding device/network checks remain follow-up work.
 
 1. Enable Anonymous Sign-Ins in the isolated test project's Auth settings. No login UI is introduced. Review the anonymous-signup rate limit (friends sharing Wi-Fi share an IP), abuse prevention and anonymous-user retention before production. Do not silently enable a CAPTCHA requiring user interaction. Apply ALL THREE migrations in order during a coordinated maintenance window; partial migration is not a complete release.
 2. Back up rooms and settle active rounds. Test the migration against an isolated Supabase project with the same table and RLS, then validate real multi-connection lock contention. PGlite unit tests use a single queued connection, not a distributed load test.
@@ -54,6 +62,6 @@ These are UTF-8 JSON application payloads before network compression. IDs, times
 
 `npm run test:browser` runs local Playwright checks with all backend calls mocked. Install Chromium with `npx playwright install chromium` or supply `CHROMIUM_PATH`. Both desktop (1280x900) and mobile-sized (360x780) Chromium pass 200 compact updates with unchanged DOM count (135 nodes), on-demand 50-row pagination, page replacement, refresh, error/retry, empty state and dialog close. Screenshots go to ignored `test-results/`. No production endpoint is used. This is not a real iOS/Android/WeChat or live Supabase E2E test.
 
-## Rollback and retention
+## Recovery and retention
 
-Keep a pre-deployment database backup and the old frontend artifact. Do not simply restore the old frontend after the migration: it cannot write through the revision trigger and it would restore the lost-update bug. Prefer a maintenance/read-only page while rolling back code and database together. After the third migration, restoring the earlier engine without reconstructing all embedded logs would lose retry protection: restore matching database and code together. Never delete private room_events receipts independently of their rooms; old request IDs must remain deduplicated. Long-term archival/storage retention remains follow-up work. Snapshot size is bounded with respect to historical actions for a fixed membership; accumulated former members can still increase its size and must not be silently deleted because their balances form part of the ledger.
+Fix forward with coordinated code and database changes. Do not republish the old frontend: it cannot write through the revision trigger and would restore the lost-update bug. The owner authorized discarding legacy scores; no recovery of those deleted scores is promised. Never delete private room_events receipts independently of active rooms; old request IDs must remain deduplicated. Long-term archival/storage retention remains follow-up work. Snapshot size is bounded with respect to historical actions for fixed membership; accumulated former members can still increase its size and must not be silently deleted because their balances form part of the ledger.
