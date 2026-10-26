@@ -1,6 +1,8 @@
-import { Room, Player } from '../types';
+import { Room, RoomPreview } from '../types';
 import { AVATARS } from '../constants';
 import { supabase } from '../lib/supabase';
+import { ensureIdentity } from './identity';
+import { SESSION_KEY } from '../constants';
 
 type Listener = (room: Room | null) => void;
 type SubscriptionStatus = 'CONNECTING' | 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'CLOSED';
@@ -11,9 +13,16 @@ const locks = new Set<string>();
 type Command = { p_room_id: string; p_actor: string; p_action: string; p_args: Record<string, unknown>; p_request_id: string };
 
 export const getRoom = async (roomId: string): Promise<Room | null> => {
+  await ensureIdentity();
   const { data, error } = await supabase.from('rooms').select('content').eq('id', roomId).maybeSingle();
   if (error) throw new Error(error.message);
   return data?.content as Room ?? null;
+};
+export const previewRoom = async (roomId: string): Promise<RoomPreview | null> => {
+  await ensureIdentity();
+  const { data, error } = await supabase.rpc('preview_room', { p_room_id: roomId });
+  if (error) throw new Error(error.message);
+  return data as RoomPreview | null;
 };
 export const hasPendingAction = (id: string) => !!localStorage.getItem(pendingKey(id));
 
@@ -21,6 +30,8 @@ const send = async (command: Command): Promise<Room | null> => {
   if (locks.has(command.p_room_id)) throw new Error('操作正在提交，请稍候');
   locks.add(command.p_room_id);
   try {
+    const identity = await ensureIdentity();
+    if (command.p_actor !== identity) throw new Error('本机身份已变化，不能接管原成员的操作');
     const { data, error } = await supabase.rpc('room_action', command);
     if (error) {
       // Only explicit database/validation rejections are definitive. Network errors may hide a commit.
@@ -51,27 +62,37 @@ export const retryPendingAction = async (roomId: string) => {
 export const createRoom = async (hostName: string, ante = 5) => {
   const nickname = hostName.trim();
   if (!nickname || nickname.length > 20) throw new Error('昵称须为 1 到 20 个字符');
-  const hostId = crypto.randomUUID();
-  const player: Player = { id: hostId, nickname, avatar: AVATARS[0], balance: 0, status: 'active', cardStatus: 'blind', isOnline: true, isHost: true };
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const roomId = String(1000 + crypto.getRandomValues(new Uint32Array(1))[0] % 9000);
-    const room: Room = { id: roomId, hostId, status: 'waiting', pot: 0, ante, roundCount: 0, revision: 0, createdAt: Date.now(), players: { [hostId]: player }, logs: [] };
-    const { error } = await supabase.from('rooms').insert({ id: roomId, content: room });
-    if (!error) return { roomId, userId: hostId };
-    if (error.code !== '23505') throw new Error(error.message);
+  const userId = await ensureIdentity();
+  const key = `zjh_pending_create_${userId}`;
+  const saved = localStorage.getItem(key);
+  const args = saved ? JSON.parse(saved) : { p_request_id: crypto.randomUUID(), p_nickname: nickname, p_ante: ante, p_avatar: AVATARS[0] };
+  localStorage.setItem(key, JSON.stringify(args));
+  const { data, error } = await supabase.rpc('create_room', args);
+  if (error) {
+    if (error.code && /^[0-9A-Z]{5}$/.test(error.code)) localStorage.removeItem(key);
+    throw new Error(error.code ? error.message : '创建结果尚未确认，请再次点击创建以恢复同一个房间');
   }
-  throw new Error('房间号暂时不可用，请重试');
+  const room = data as Room;
+  if (room.closed) {
+    localStorage.removeItem(key);
+    throw new Error('上次创建的房间已解散，请重新创建');
+  }
+  localStorage.setItem(SESSION_KEY, JSON.stringify({ roomId: room.id, userId }));
+  localStorage.removeItem(key);
+  return { roomId: room.id, userId };
 };
 export const joinRoom = async (roomId: string, nickname: string) => {
+  const userId = await ensureIdentity();
   const pending = localStorage.getItem(pendingKey(roomId));
   if (pending) {
     const command: Command = JSON.parse(pending);
-    if (command.p_action !== 'join') throw new Error('该房间有未确认操作，请先恢复原会话');
+    if (command.p_action !== 'join' || command.p_actor !== userId) throw new Error('该房间有未确认操作，请先恢复原会话');
     await send(command);
-    return { userId: command.p_actor };
+    localStorage.setItem(SESSION_KEY, JSON.stringify({ roomId, userId }));
+    return { userId };
   }
-  const userId = crypto.randomUUID();
   await act(roomId, userId, 'join', { nickname, avatar: AVATARS[Math.floor(Math.random() * AVATARS.length)] });
+  localStorage.setItem(SESSION_KEY, JSON.stringify({ roomId, userId }));
   return { userId };
 };
 

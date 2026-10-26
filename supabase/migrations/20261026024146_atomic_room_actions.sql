@@ -72,12 +72,12 @@ begin
 
   case p_action
   when 'join' then
-    if player is not null then raise exception '该成员已存在'; end if;
+    if player is not null and not coalesce((player->>'removed')::boolean,false) then raise exception '该成员已存在'; end if;
     if (select count(*) from jsonb_each(r->'players') where not coalesce((value->>'removed')::boolean, false)) >= 15 then
       raise exception '房间已满（限 15 人）';
     end if;
     player := jsonb_build_object('id', p_actor, 'nickname', nickname, 'avatar', left(coalesce(p_args->>'avatar', ''), 10),
-      'balance', 0, 'status', 'active', 'cardStatus', 'blind', 'isOnline', true, 'isHost', false);
+      'balance', coalesce((player->>'balance')::numeric,0), 'status', 'active', 'cardStatus', 'blind', 'isOnline', true, 'isHost', false);
     r := jsonb_set(r, array['players', p_actor], player);
     message := nickname || ' 加入了房间';
   when 'start' then

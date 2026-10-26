@@ -5,12 +5,14 @@ import { GameState } from './types';
 import { getRoom, subscribeToRoom } from './services/gameService';
 import { SESSION_KEY } from './constants';
 import { isConfigured } from './lib/supabase';
+import { ensureIdentity } from './services/identity';
 import { AlertTriangle, ExternalLink, Copy } from 'lucide-react';
 
 const App: React.FC = () => {
   const [gameState, setGameState] = useState<GameState>({ room: null, me: null });
   const [isLoading, setIsLoading] = useState(true);
   const [sessionError, setSessionError] = useState('');
+  const [lobbyNotice, setLobbyNotice] = useState('');
   const [connectionStatus, setConnectionStatus] = useState<'CONNECTING' | 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'CLOSED'>('CONNECTING');
   
   // Track subscription cleanup
@@ -27,13 +29,16 @@ const App: React.FC = () => {
       const session = localStorage.getItem(SESSION_KEY);
       if (session) {
         try {
-          const { roomId, userId } = JSON.parse(session);
+          const { roomId } = JSON.parse(session);
+          const userId = await ensureIdentity();
           const room = await getRoom(roomId);
           if (room && !room.closed && room.players[userId] && !room.players[userId].removed) {
             setGameState({ room, me: room.players[userId] });
             setupSubscription(roomId, userId, room.revision ?? 0);
           } else {
+            localStorage.setItem(`${SESSION_KEY}_previous`, session);
             localStorage.removeItem(SESSION_KEY);
+            setLobbyNotice('原房间已关闭、为旧版房间或本机身份已变化。请创建或加入新房间；历史数据不会被改写。');
           }
         } catch (e) {
           setSessionError('暂时无法恢复连接，你的房间身份已保留。请检查网络后重试。');
@@ -146,23 +151,23 @@ const App: React.FC = () => {
             <div className="bg-slate-950 rounded-xl border border-slate-800 p-5">
                <h3 className="text-sm font-semibold text-slate-300 uppercase tracking-wider mb-4 flex items-center gap-2">
                 <span className="w-5 h-5 rounded-full bg-slate-800 flex items-center justify-center text-xs">2</span>
-                修改配置文件
+                配置部署环境变量
               </h3>
               <p className="text-slate-400 text-sm mb-3">
-                打开项目中的 <code className="bg-slate-800 px-1.5 py-0.5 rounded text-slate-200 text-xs font-mono">lib/supabase.ts</code> 文件，填入你的信息：
+                在部署平台填写以下环境变量，并重新构建网站。测试预览必须使用独立测试项目：
               </p>
               
               <div className="bg-black/80 rounded-lg border border-slate-800 overflow-hidden">
                 <div className="flex items-center justify-between px-4 py-2 bg-slate-900/50 border-b border-slate-800">
-                  <span className="text-xs text-slate-500 font-mono">lib/supabase.ts</span>
+                  <span className="text-xs text-slate-500 font-mono">.env.local / Netlify Environment variables</span>
                 </div>
                 <div className="p-4 overflow-x-auto">
                   <pre className="font-mono text-xs leading-relaxed">
 <span className="text-slate-500">// 1. 填入 Project URL (例如 https://xyz.supabase.co)</span>
-<span className="text-purple-400">const</span> <span className="text-blue-400">SUPABASE_URL</span> = <span className="text-emerald-400">'在此处粘贴 URL'</span>;
+<span className="text-blue-400">VITE_SUPABASE_URL</span>=<span className="text-emerald-400">https://测试项目.supabase.co</span>
 
 <span className="text-slate-500">// 2. 填入 anon public Key</span>
-<span className="text-purple-400">const</span> <span className="text-blue-400">SUPABASE_ANON_KEY</span> = <span className="text-emerald-400">'在此处粘贴 Key'</span>;
+<span className="text-blue-400">VITE_SUPABASE_ANON_KEY</span>=<span className="text-emerald-400">测试项目的公开密钥</span>
                   </pre>
                 </div>
               </div>
@@ -187,7 +192,7 @@ const App: React.FC = () => {
   }
 
   if (!gameState.room || !gameState.me) {
-    return <Lobby onJoin={handleJoin} />;
+    return <Lobby onJoin={handleJoin} notice={lobbyNotice} />;
   }
 
   return (

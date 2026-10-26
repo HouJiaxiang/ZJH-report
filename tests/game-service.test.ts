@@ -1,4 +1,4 @@
-import { test, mock, afterEach } from 'node:test';
+import { test, mock, afterEach, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { supabase } from '../lib/supabase';
 import { placeBet, retryPendingAction, hasPendingAction, subscribeToRoom } from '../services/gameService';
@@ -6,6 +6,7 @@ import { placeBet, retryPendingAction, hasPendingAction, subscribeToRoom } from 
 const values = new Map<string,string>();
 Object.defineProperty(globalThis,'localStorage',{value:{getItem:(k:string)=>values.get(k)??null,setItem:(k:string,v:string)=>values.set(k,v),removeItem:(k:string)=>values.delete(k)}, configurable:true});
 afterEach(()=>{mock.restoreAll();values.clear();});
+beforeEach(()=>{mock.method(supabase.auth,'getSession',async()=>({data:{session:{user:{id:'a'}}},error:null}) as any);});
 
 test('one RPC per bet, with round guard and no read-before-write',async()=>{
   const rpc=mock.method(supabase,'rpc',async()=>({data:{id:'test',revision:1},error:null}));
@@ -35,9 +36,12 @@ test('a server validation failure clears pending state and remains visible',asyn
 });
 test('rapid duplicate taps do not create a second mutation',async()=>{
   let finish!: (x:any)=>void;
-  const rpc=mock.method(supabase,'rpc',()=>new Promise(resolve=>{finish=resolve;}));
+  let started!: ()=>void;
+  const rpcStarted = new Promise<void>(resolve=>{started=resolve;});
+  const rpc=mock.method(supabase,'rpc',()=>new Promise(resolve=>{finish=resolve;started();}));
   const first=placeBet('test','a',5,1);
   await assert.rejects(placeBet('test','a',5,1),/上一笔/);
+  await rpcStarted;
   finish({data:{id:'test',revision:1},error:null});
   await first;
   assert.equal(rpc.mock.calls.length,1);

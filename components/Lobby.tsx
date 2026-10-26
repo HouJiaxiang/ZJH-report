@@ -1,14 +1,15 @@
 import React, { useState } from 'react';
-import { createRoom, joinRoom, getRoom } from '../services/gameService';
+import { createRoom, joinRoom, previewRoom as fetchPreview } from '../services/gameService';
 import { Button } from './Button';
 import { Modal } from './Modal';
-import { Room, Player } from '../types';
+import { RoomPreview } from '../types';
 
 interface LobbyProps {
-  onJoin: (roomId: string, userId: string) => void;
+  onJoin: (roomId: string, userId: string) => Promise<void>;
+  notice?: string;
 }
 
-export const Lobby: React.FC<LobbyProps> = ({ onJoin }) => {
+export const Lobby: React.FC<LobbyProps> = ({ onJoin, notice }) => {
   const [name, setName] = useState('');
   const [roomCode, setRoomCode] = useState('');
   const [activeTab, setActiveTab] = useState<'join' | 'create'>('join');
@@ -16,7 +17,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onJoin }) => {
   const [loading, setLoading] = useState(false);
   
   // Preview State
-  const [previewRoom, setPreviewRoom] = useState<Room | null>(null);
+  const [previewRoom, setPreviewRoom] = useState<RoomPreview | null>(null);
   const [showPreview, setShowPreview] = useState(false);
 
   const handleCreate = async () => {
@@ -25,7 +26,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onJoin }) => {
     setError('');
     try {
       const { roomId, userId } = await createRoom(name);
-      onJoin(roomId, userId);
+      await onJoin(roomId, userId);
     } catch (e: any) {
       console.error('Create room failed:', e);
       let msg = e.message || '创建房间失败';
@@ -48,15 +49,18 @@ export const Lobby: React.FC<LobbyProps> = ({ onJoin }) => {
     if (roomCode.length !== 4) return setError('无效的房间号');
     
     setError('');
+    setLoading(true);
     try {
-      const room = await getRoom(roomCode);
-      if (!room || room.closed) return setError('找不到房间或房间已解散');
+      const room = await fetchPreview(roomCode);
+      if (!room) return setError('找不到房间或房间已解散');
       
       setPreviewRoom(room);
       setShowPreview(true);
     } catch (e: any) {
       console.error('Preview room failed:', e);
       setError(e.message || '查找房间出错');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -66,7 +70,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onJoin }) => {
     setError('');
     try {
       const { userId } = await joinRoom(previewRoom.id, name);
-      onJoin(previewRoom.id, userId);
+      await onJoin(previewRoom.id, userId);
     } catch (e: any) {
       setError(e.message || '加入房间失败');
     } finally {
@@ -103,6 +107,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onJoin }) => {
           </div>
 
           <div className="space-y-4">
+            {notice && <p role="status" className="text-sm text-amber-300">{notice}</p>}
             <div>
               <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">你的昵称</label>
               <input
@@ -160,12 +165,12 @@ export const Lobby: React.FC<LobbyProps> = ({ onJoin }) => {
               <div className="flex justify-between text-sm border-b border-slate-800 pb-2">
                 <span className="text-slate-400">房主</span>
                 <span className="text-white font-medium">
-                  {previewRoom.players[previewRoom.hostId]?.nickname || '未知'}
+                  {previewRoom.hostName}
                 </span>
               </div>
               <div className="flex justify-between text-sm border-b border-slate-800 pb-2">
                 <span className="text-slate-400">玩家</span>
-                <span className="text-white font-medium">{Object.values(previewRoom.players).filter(p => !p.removed).length} / 15</span>
+                <span className="text-white font-medium">{previewRoom.playerCount} / 15</span>
               </div>
               <div className="flex justify-between text-sm border-b border-slate-800 pb-2">
                 <span className="text-slate-400">池底</span>

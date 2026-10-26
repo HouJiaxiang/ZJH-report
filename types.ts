@@ -25,6 +25,7 @@ export interface LogEntry {
 }
 
 export interface Room {
+  protocol?: number;
   id: string;
   hostId: string;
   status: RoomStatus;
@@ -41,4 +42,12 @@ export interface Room {
 export interface GameState {
   room: Room | null;
   me: Player | null;
+}
+
+export interface RoomPreview {
+  id: string;
+  hostName: string;
+  playerCount: number;
+  pot: number;
+  status: RoomStatus;
 }
