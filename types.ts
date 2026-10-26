@@ -36,7 +36,13 @@ export interface Room {
   revision?: number;
   closed?: boolean;
   players: Record<string, Player>;
+  // Latest event only; the full ledger is fetched via room_history.
   logs: LogEntry[];
+}
+
+export interface HistoryPage {
+  entries: { cursor: string; event: LogEntry }[];
+  nextCursor: string | null;
 }
 
 export interface GameState {

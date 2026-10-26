@@ -1,12 +1,22 @@
 import { test, mock, afterEach, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { supabase } from '../lib/supabase';
-import { placeBet, retryPendingAction, hasPendingAction, subscribeToRoom } from '../services/gameService';
+import { placeBet, retryPendingAction, hasPendingAction, subscribeToRoom, getRoomHistory } from '../services/gameService';
 
 const values = new Map<string,string>();
 Object.defineProperty(globalThis,'localStorage',{value:{getItem:(k:string)=>values.get(k)??null,setItem:(k:string,v:string)=>values.set(k,v),removeItem:(k:string)=>values.delete(k)}, configurable:true});
 afterEach(()=>{mock.restoreAll();values.clear();});
 beforeEach(()=>{mock.method(supabase.auth,'getSession',async()=>({data:{session:{user:{id:'a'}}},error:null}) as any);});
+
+test('history is fetched separately in bounded pages with lossless string cursors',async()=>{
+  const page={entries:[],nextCursor:null};
+  const rpc=mock.method(supabase,'rpc',async()=>({data:page,error:null}));
+  assert.deepEqual(await getRoomHistory('test','9007199254740993'),page);
+  assert.deepEqual(rpc.mock.calls[0].arguments,['room_history',{p_room_id:'test',p_before:'9007199254740993',p_limit:50}]);
+  assert.equal(hasPendingAction('test'),false);
+  rpc.mock.mockImplementation(async()=>({data:null,error:{message:'无权查看房间记录'}}));
+  await assert.rejects(getRoomHistory('test'),/无权/);
+});
 
 test('one RPC per bet, with round guard and no read-before-write',async()=>{
   const rpc=mock.method(supabase,'rpc',async()=>({data:{id:'test',revision:1},error:null}));

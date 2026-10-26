@@ -1,4 +1,4 @@
-import { Room, RoomPreview } from '../types';
+import { Room, RoomPreview, HistoryPage } from '../types';
 import { AVATARS } from '../constants';
 import { supabase } from '../lib/supabase';
 import { ensureIdentity } from './identity';
@@ -25,6 +25,13 @@ export const previewRoom = async (roomId: string): Promise<RoomPreview | null> =
   return data as RoomPreview | null;
 };
 export const hasPendingAction = (id: string) => !!localStorage.getItem(pendingKey(id));
+
+export const getRoomHistory = async (roomId: string, before: string | null = null): Promise<HistoryPage> => {
+  await ensureIdentity();
+  const { data, error } = await supabase.rpc('room_history', { p_room_id: roomId, p_before: before, p_limit: 50 });
+  if (error) throw new Error(error.message);
+  return data as HistoryPage;
+};
 
 const send = async (command: Command): Promise<Room | null> => {
   if (locks.has(command.p_room_id)) throw new Error('操作正在提交，请稍候');

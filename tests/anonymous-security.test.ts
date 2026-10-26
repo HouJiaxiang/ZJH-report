@@ -16,7 +16,7 @@ before(async()=>{
     grant all on public.rooms to public,anon,authenticated;
     alter table public.rooms enable row level security;
     create policy legacy on public.rooms for all using(true) with check(true);`);
-  for(const file of ['20261026024146_atomic_room_actions.sql','20261026033410_anonymous_room_identity.sql'])
+  for(const file of ['20261026024146_atomic_room_actions.sql','20261026033410_anonymous_room_identity.sql','20261026060408_bounded_room_history.sql'])
     await db.exec(readFileSync(new URL(`../supabase/migrations/${file}`,import.meta.url),'utf8'));
 });
 after(()=>db.close());

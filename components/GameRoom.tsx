@@ -2,11 +2,12 @@ import React, { useState, useRef } from 'react';
 import { Room, Player } from '../types';
 import { startRound, placeBet, fold, lookAtCards, settleRound, transferCredits, leaveRoom, disbandRoom, kickPlayer, renamePlayer, retryPendingAction, hasPendingAction } from '../services/gameService';
 import { PotDisplay } from './PotDisplay';
+import { RoomHistory } from './RoomHistory';
 import { PlayerCard } from './PlayerCard';
 import { Controls } from './Controls';
 import { Modal } from './Modal';
 import { Button } from './Button';
-import { Copy, Check, Settings, LogOut, AlertTriangle, Pencil, UserMinus } from 'lucide-react';
+import { Copy, Check, Settings, LogOut, AlertTriangle, Pencil, UserMinus, History } from 'lucide-react';
 
 interface GameRoomProps {
   room: Room;
@@ -24,6 +25,7 @@ export const GameRoom: React.FC<GameRoomProps> = ({ room, me, connectionStatus }
   const busyRef = useRef(false);
   const [error, setError] = useState('');
   const [showRename, setShowRename] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [nickname, setNickname] = useState(me.nickname);
   const [kickTarget, setKickTarget] = useState<string | null>(null);
   const run = async (action: () => Promise<unknown>, done?: () => void) => {
@@ -191,6 +193,10 @@ export const GameRoom: React.FC<GameRoomProps> = ({ room, me, connectionStatus }
       </div>
 
       {/* Controls */}
+      <div className="px-4 pb-3 flex justify-end">
+        <button onClick={() => setShowHistory(true)} className="flex items-center gap-2 py-2 text-sm text-slate-300"><History size={16} />房间记录</button>
+      </div>
+      {showHistory && <RoomHistory key={room.id} roomId={room.id} onClose={() => setShowHistory(false)} />}
       {removedPlayers.length > 0 && <details className="px-4 pb-4 text-sm text-slate-400"><summary>已离开成员的积分记录</summary>{removedPlayers.map(p => <div key={p.id} className="flex justify-between py-1"><span className="break-all">{p.nickname}</span><span>{p.balance}</span></div>)}</details>}
       <Controls 
         player={me}

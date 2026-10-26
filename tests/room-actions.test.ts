@@ -11,20 +11,25 @@ before(async () => {
   await db.exec(`create role anon; create role authenticated;
     create table public.rooms (id text primary key, content jsonb not null, updated_at timestamptz default now());`);
   await db.exec(migration);
+  await db.exec(`create schema auth;
+    create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;`);
+  for (const file of ['20261026033410_anonymous_room_identity.sql', '20261026060408_bounded_room_history.sql'])
+    await db.exec(readFileSync(new URL(`../supabase/migrations/${file}`, import.meta.url), 'utf8'));
 });
 after(() => db.close());
 const create = async () => {
   const id = randomUUID();
-  const room = { id, hostId: 'host', status: 'waiting', pot: 0, ante: 1, roundCount: 0, revision: 0, createdAt: 0,
+  const room = { id, protocol: 2, hostId: 'host', status: 'waiting', pot: 0, ante: 1, roundCount: 0, revision: 0, createdAt: 0,
     players: { host: { id: 'host', nickname: 'Host', avatar: '', balance: 0, status: 'active', cardStatus: 'blind', isOnline: true, isHost: true } }, logs: [] };
   await db.query('insert into rooms (id,content) values ($1,$2)', [id, JSON.stringify(room)]);
   return id;
 };
 const act = async (id: string, actor: string, action: string, args = {}, request = randomUUID()) => {
-  const result = await db.query<{ room: Room }>('select public.room_action($1,$2,$3,$4,$5) as room', [id, actor, action, JSON.stringify(args), request]);
+  const result = await db.query<{ room: Room }>('select private.apply_room_action($1,$2,$3,$4,$5) as room', [id, actor, action, JSON.stringify(args), request]);
   return result.rows[0].room;
 };
 const read = async (id: string) => (await db.query<{content: Room}>('select content from rooms where id=$1',[id])).rows[0].content;
+const history = async (id: string) => (await db.query<{event: Room['logs'][number]}>('select event from private.room_events where room_id=$1 order by sequence',[id])).rows.map(r=>r.event);
 const conserved = (r: Room) => assert.equal(Object.values(r.players).reduce((n,p) => n+p.balance, r.pot), 0);
 const started = async () => {
   const id = await create();
@@ -43,7 +48,8 @@ test('interleaved bets, transfers and look actions preserve every credit', async
   assert.equal(r.pot, 123);
   assert.equal(r.players.a.balance, -68);
   assert.equal(r.players.b.balance, -54);
-  assert.equal(r.logs.filter(l=>l.type==='bet').length,60);
+  assert.equal((await history(id)).filter(l=>l.type==='bet').length,60);
+  assert.equal(r.logs.length,1);
   conserved(r);
 });
 test('lost-response retries apply once, even after a later settlement', async () => {
@@ -92,11 +98,12 @@ test('kick requires host ID and waiting state, archives credit, rejects removed 
 test('rename preserves identity, credit, and historical log names', async () => {
   const id = await started();
   const old = await read(id);
+  const oldLogs = await history(id);
   const r = await act(id,'a','rename',{nickname:'  Alice 2  '});
   assert.equal(r.players.a.nickname,'Alice 2');
   assert.equal(r.players.a.id,'a');
   assert.equal(r.players.a.balance,old.players.a.balance);
-  assert.deepEqual(r.logs.slice(0,-1),old.logs);
+  assert.deepEqual((await history(id)).slice(0,-1),oldLogs);
   await assert.rejects(act(id,'a','rename',{nickname:' '}));
   await assert.rejects(act(id,'a','rename',{nickname:'x'.repeat(21)}));
 });
