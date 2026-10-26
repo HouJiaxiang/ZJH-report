@@ -9,6 +9,7 @@ interface ControlsProps {
   player: Player;
   roomStatus: RoomStatus;
   roundCount: number;
+  busy?: boolean;
   onBet: (amount: number) => void;
   onFold: () => void;
   onLook: () => void;
@@ -22,6 +23,7 @@ export const Controls: React.FC<ControlsProps> = ({
   player, 
   roomStatus, 
   roundCount,
+  busy = false,
   onBet, 
   onFold, 
   onLook,
@@ -36,8 +38,8 @@ export const Controls: React.FC<ControlsProps> = ({
   const [selectedAnte, setSelectedAnte] = useState(1); // Default to 1
 
   const handleCustomBet = () => {
-    const amount = parseInt(customBet);
-    if (!isNaN(amount) && amount > 0) {
+    const amount = Number(customBet);
+    if (Number.isSafeInteger(amount) && amount > 0 && amount <= 1000000 && !busy) {
       onBet(amount);
       setShowBetMenu(false);
       setCustomBet('');
@@ -66,7 +68,7 @@ export const Controls: React.FC<ControlsProps> = ({
     return (
       <>
         <div className="fixed bottom-0 left-0 right-0 p-4 bg-slate-900 border-t border-slate-800 z-40">
-          <Button onClick={handleHostStartClick} fullWidth size="lg" className="shadow-lg shadow-amber-900/20">
+          <Button disabled={busy} onClick={handleHostStartClick} fullWidth size="lg" className="shadow-lg shadow-amber-900/20">
             {roundCount === 0 ? '设置底注并开始' : '开始下一轮'}
           </Button>
         </div>
@@ -103,7 +105,7 @@ export const Controls: React.FC<ControlsProps> = ({
               ))}
             </div>
 
-            <Button fullWidth onClick={confirmStartGame} size="lg">
+            <Button disabled={busy} fullWidth onClick={confirmStartGame} size="lg">
               确定开始 (底注: {selectedAnte})
             </Button>
           </div>
@@ -161,6 +163,7 @@ export const Controls: React.FC<ControlsProps> = ({
             {BET_AMOUNTS.map(amount => (
               <button
                 key={amount}
+                disabled={busy}
                 onClick={() => { onBet(amount); setShowBetMenu(false); }}
                 className="bg-slate-700 hover:bg-emerald-600 text-white font-mono font-bold py-3 rounded-lg transition-colors"
               >
@@ -180,7 +183,7 @@ export const Controls: React.FC<ControlsProps> = ({
             />
             <button 
               onClick={handleCustomBet}
-              disabled={!customBet || parseInt(customBet) <= 0}
+              disabled={busy || !Number.isSafeInteger(Number(customBet)) || Number(customBet) <= 0 || Number(customBet) > 1000000}
               className="bg-emerald-600 text-white font-bold px-4 py-2 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-emerald-500 transition-colors"
             >
               下注
@@ -202,6 +205,7 @@ export const Controls: React.FC<ControlsProps> = ({
         {/* Fold */}
         <button 
           onClick={onFold}
+          disabled={busy}
           className="flex-1 flex flex-col items-center justify-center bg-rose-950/50 text-rose-500 border border-rose-900/50 rounded-xl py-3 active:scale-95 transition-transform"
         >
           <X size={24} />
@@ -211,6 +215,7 @@ export const Controls: React.FC<ControlsProps> = ({
         {/* Bet */}
         <button 
           onClick={() => setShowBetMenu(!showBetMenu)}
+          disabled={busy}
           className="flex-[2] flex flex-col items-center justify-center bg-emerald-600 text-white rounded-xl py-3 shadow-[0_0_15px_rgba(5,150,105,0.4)] active:scale-95 transition-transform"
         >
           {showBetMenu ? <ChevronUp size={24} /> : <DollarSign size={24} />}
@@ -221,6 +226,7 @@ export const Controls: React.FC<ControlsProps> = ({
         {player.cardStatus === 'blind' ? (
           <button 
             onClick={onLook}
+            disabled={busy}
             className="flex-1 flex flex-col items-center justify-center bg-indigo-950/50 text-indigo-400 border border-indigo-900/50 rounded-xl py-3 active:scale-95 transition-transform"
           >
             <Eye size={24} />

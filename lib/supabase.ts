@@ -24,5 +24,17 @@ if (!isConfigured) {
 // 创建客户端
 // 注意: 这里移除了占位符客户端的逻辑，未配置时直接抛出清晰的错误，避免静默失败
 export const supabase = isConfigured 
-  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) 
+  ? createClient(import.meta.env?.VITE_SUPABASE_URL || SUPABASE_URL, import.meta.env?.VITE_SUPABASE_ANON_KEY || SUPABASE_ANON_KEY, {
+      global: {
+        fetch: async (input, init) => {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 15000);
+          const abort = () => controller.abort();
+          if (init?.signal?.aborted) controller.abort();
+          init?.signal?.addEventListener('abort', abort, { once: true });
+          try { return await fetch(input, { ...init, signal: controller.signal }); }
+          finally { clearTimeout(timer); init?.signal?.removeEventListener('abort', abort); }
+        },
+      },
+    })
   : null!; // 如果未配置，让它在使用时报错，而不是静默失败

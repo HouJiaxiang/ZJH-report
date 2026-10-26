@@ -34,7 +34,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onJoin }) => {
       if (msg.includes('relation "rooms" does not exist')) {
         msg = '错误：数据库表 "rooms" 不存在。请去 Supabase SQL Editor 运行建表脚本。';
       } else if (msg.includes('row-level security')) {
-        msg = '错误：权限不足。请在 Supabase 中对 rooms 表关闭 RLS (Disable RLS)。';
+        msg = '错误：权限不足。请检查数据库授权配置，不要关闭 RLS。';
       }
       
       setError(msg);
@@ -50,7 +50,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onJoin }) => {
     setError('');
     try {
       const room = await getRoom(roomCode);
-      if (!room) return setError('找不到房间');
+      if (!room || room.closed) return setError('找不到房间或房间已解散');
       
       setPreviewRoom(room);
       setShowPreview(true);
@@ -107,6 +107,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onJoin }) => {
               <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">你的昵称</label>
               <input
                 type="text"
+                maxLength={20}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="例如：赌神"
@@ -164,7 +165,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onJoin }) => {
               </div>
               <div className="flex justify-between text-sm border-b border-slate-800 pb-2">
                 <span className="text-slate-400">玩家</span>
-                <span className="text-white font-medium">{Object.keys(previewRoom.players).length} / 10</span>
+                <span className="text-white font-medium">{Object.values(previewRoom.players).filter(p => !p.removed).length} / 15</span>
               </div>
               <div className="flex justify-between text-sm border-b border-slate-800 pb-2">
                 <span className="text-slate-400">池底</span>

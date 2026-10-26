@@ -1,12 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import { Room, Player } from '../types';
-import { startRound, placeBet, fold, lookAtCards, settleRound, transferCredits, leaveRoom, disbandRoom } from '../services/gameService';
+import { startRound, placeBet, fold, lookAtCards, settleRound, transferCredits, leaveRoom, disbandRoom, kickPlayer, renamePlayer, retryPendingAction, hasPendingAction } from '../services/gameService';
 import { PotDisplay } from './PotDisplay';
 import { PlayerCard } from './PlayerCard';
 import { Controls } from './Controls';
 import { Modal } from './Modal';
 import { Button } from './Button';
-import { Copy, Check, Users, Wifi, WifiOff, Settings, LogOut, AlertTriangle } from 'lucide-react';
+import { Copy, Check, Settings, LogOut, AlertTriangle, Pencil, UserMinus } from 'lucide-react';
 
 interface GameRoomProps {
   room: Room;
@@ -20,10 +20,25 @@ export const GameRoom: React.FC<GameRoomProps> = ({ room, me, connectionStatus }
   const [showSettleModal, setShowSettleModal] = useState(false);
   const [showExitModal, setShowExitModal] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [isProcessingExit, setIsProcessingExit] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  const [error, setError] = useState('');
+  const [showRename, setShowRename] = useState(false);
+  const [nickname, setNickname] = useState(me.nickname);
+  const [kickTarget, setKickTarget] = useState<string | null>(null);
+  const run = async (action: () => Promise<unknown>, done?: () => void) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
+    setError('');
+    try { await action(); done?.(); }
+    catch (e) { setError(e instanceof Error ? e.message : '操作失败，请检查网络'); }
+    finally { busyRef.current = false; setBusy(false); }
+  };
 
   // Sorting players: Me first, then others
-  const playersList = Object.values(room.players) as Player[];
+  const playersList = Object.values(room.players).filter(p => !p.removed);
+  const removedPlayers = Object.values(room.players).filter(p => p.removed);
   const sortedPlayers = [
     ...playersList.filter(p => p.id === me.id),
     ...playersList.filter(p => p.id !== me.id)
@@ -32,50 +47,35 @@ export const GameRoom: React.FC<GameRoomProps> = ({ room, me, connectionStatus }
   const activePlayers = playersList.filter(p => p.status !== 'folded');
 
   const handlePlayerClick = (playerId: string) => {
-    if (playerId !== me.id) {
+    if (playerId === me.id) {
+      setNickname(me.nickname);
+      setShowRename(true);
+    } else {
       setSelectedPlayerId(playerId);
     }
   };
 
   const handleTransfer = async () => {
     if (!selectedPlayerId || !transferAmount) return;
-    const amount = parseInt(transferAmount);
-    if (isNaN(amount) || amount <= 0) return;
+    const amount = Number(transferAmount);
+    if (!Number.isSafeInteger(amount) || amount <= 0 || amount > 1000000) return setError('积分须为 1 到 1000000 的整数');
     
-    await transferCredits(room.id, me.id, selectedPlayerId, amount);
-    setSelectedPlayerId(null);
-    setTransferAmount('');
+    await run(() => transferCredits(room.id, me.id, selectedPlayerId, amount), () => {
+      setSelectedPlayerId(null);
+      setTransferAmount('');
+    });
   };
 
   const handleSettle = async (winnerId: string) => {
-    await settleRound(room.id, winnerId);
-    setShowSettleModal(false);
+    await run(() => settleRound(room.id, me.id, winnerId, room.roundCount), () => setShowSettleModal(false));
   };
 
   const handleLeave = async () => {
-    setIsProcessingExit(true);
-    try {
-      await leaveRoom(room.id, me.id);
-      // App.tsx will handle the session cleanup when it detects user is missing from room
-      // or we can manually clear here, but safer to let subscription handle "kicked" logic if preferred.
-      // However, for immediate UX, we usually let App.tsx handle it.
-      // But to be sure:
-      window.location.reload(); // Hard reset is simplest way to return to lobby without state ghosts
-    } catch (e) {
-      console.error(e);
-      setIsProcessingExit(false);
-    }
+    await run(() => leaveRoom(room.id, me.id));
   };
 
   const handleDisband = async () => {
-    setIsProcessingExit(true);
-    try {
-      await disbandRoom(room.id);
-      // App.tsx handles the "room deleted" event
-    } catch (e) {
-      console.error(e);
-      setIsProcessingExit(false);
-    }
+    await run(() => disbandRoom(room.id, me.id));
   };
 
   const copyRoomId = () => {
@@ -104,6 +104,13 @@ export const GameRoom: React.FC<GameRoomProps> = ({ room, me, connectionStatus }
 
   return (
     <div className="min-h-screen bg-slate-950 pb-24">
+      {(busy || error || hasPendingAction(room.id)) && (
+        <div role="status" className="fixed top-0 left-0 right-0 z-[60] bg-slate-900 border-b border-slate-600 p-3 text-center text-sm text-white">
+          {busy ? '正在提交...' : error || '有一笔操作等待确认'}
+          {!busy && hasPendingAction(room.id) && <button className="ml-3 text-amber-400 underline" onClick={() => run(() => retryPendingAction(room.id))}>重试未确认操作</button>}
+          {!busy && !hasPendingAction(room.id) && <button className="ml-3 underline" onClick={() => setError('')}>关闭</button>}
+        </div>
+      )}
       {/* Top Header */}
       <div className="sticky top-0 z-30">
         <div className="bg-slate-900/95 backdrop-blur-sm px-4 py-3 flex justify-between items-center border-b border-slate-800 shadow-lg">
@@ -133,6 +140,7 @@ export const GameRoom: React.FC<GameRoomProps> = ({ room, me, connectionStatus }
           </div>
 
           <div className="flex gap-2">
+            <button title="修改我的昵称" aria-label="修改我的昵称" onClick={() => { setNickname(me.nickname); setShowRename(true); }} className="self-center p-2 text-slate-300"><Pencil size={18} /></button>
             <div className="flex flex-col items-end gap-1">
               {/* Ante Display */}
               <div className="flex items-center gap-1.5 bg-slate-800/80 px-2 py-0.5 rounded border border-slate-700/50">
@@ -183,14 +191,16 @@ export const GameRoom: React.FC<GameRoomProps> = ({ room, me, connectionStatus }
       </div>
 
       {/* Controls */}
+      {removedPlayers.length > 0 && <details className="px-4 pb-4 text-sm text-slate-400"><summary>已离开成员的积分记录</summary>{removedPlayers.map(p => <div key={p.id} className="flex justify-between py-1"><span className="break-all">{p.nickname}</span><span>{p.balance}</span></div>)}</details>}
       <Controls 
         player={me}
         roomStatus={room.status}
         roundCount={room.roundCount}
-        onBet={(amount) => placeBet(room.id, me.id, amount)}
-        onFold={() => fold(room.id, me.id)}
-        onLook={() => lookAtCards(room.id, me.id)}
-        onStartRound={(ante) => startRound(room.id, ante)}
+        busy={busy || hasPendingAction(room.id)}
+        onBet={(amount) => run(() => placeBet(room.id, me.id, amount, room.roundCount))}
+        onFold={() => run(() => fold(room.id, me.id, room.roundCount))}
+        onLook={() => run(() => lookAtCards(room.id, me.id, room.roundCount))}
+        onStartRound={(ante) => run(() => startRound(room.id, me.id, room.roundCount, ante))}
         onSettle={() => setShowSettleModal(true)}
       />
 
@@ -198,7 +208,7 @@ export const GameRoom: React.FC<GameRoomProps> = ({ room, me, connectionStatus }
       <Modal
         isOpen={!!selectedPlayerId}
         onClose={() => setSelectedPlayerId(null)}
-        title={`转账给 ${room.players[selectedPlayerId || '']?.nickname}`}
+        title={room.players[selectedPlayerId || '']?.nickname || '成员管理'}
       >
         <div className="space-y-4">
           <p className="text-sm text-slate-400">
@@ -214,9 +224,19 @@ export const GameRoom: React.FC<GameRoomProps> = ({ room, me, connectionStatus }
           />
           <div className="flex gap-2">
             <Button variant="secondary" fullWidth onClick={() => setSelectedPlayerId(null)}>取消</Button>
-            <Button variant="success" fullWidth onClick={handleTransfer}>转账</Button>
+            <Button variant="success" fullWidth disabled={busy} onClick={handleTransfer}>转账</Button>
           </div>
+          {me.isHost && <Button variant="danger" fullWidth disabled={busy || room.status === 'playing'} onClick={() => { setKickTarget(selectedPlayerId); setSelectedPlayerId(null); }}><UserMinus size={16} className="mr-2" />{room.status === 'playing' ? '结算后可移出成员' : '移出房间'}</Button>}
         </div>
+      </Modal>
+
+      <Modal isOpen={showRename} onClose={() => setShowRename(false)} title="修改我的昵称">
+        <input aria-label="新昵称" maxLength={20} value={nickname} onChange={e => setNickname(e.target.value)} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-white mb-4" />
+        <Button fullWidth disabled={busy || !nickname.trim()} onClick={() => run(() => renamePlayer(room.id, me.id, nickname), () => setShowRename(false))}>保存昵称</Button>
+      </Modal>
+      <Modal isOpen={!!kickTarget} onClose={() => setKickTarget(null)} title="确认移出成员">
+        <p className="text-slate-300 mb-4 break-words">将 {room.players[kickTarget || '']?.nickname} 移出房间？该成员的积分和历史记录会保留。</p>
+        <Button variant="danger" fullWidth disabled={busy} onClick={() => run(() => kickPlayer(room.id, me.id, kickTarget!), () => setKickTarget(null))}>确认移出</Button>
       </Modal>
 
       {/* Settlement Modal */}
@@ -230,6 +250,7 @@ export const GameRoom: React.FC<GameRoomProps> = ({ room, me, connectionStatus }
           {activePlayers.map(p => (
             <button
               key={p.id}
+              disabled={busy}
               onClick={() => handleSettle(p.id)}
               className="w-full flex items-center justify-between p-3 rounded-lg bg-slate-800 hover:bg-slate-700 transition-colors"
             >
@@ -250,6 +271,7 @@ export const GameRoom: React.FC<GameRoomProps> = ({ room, me, connectionStatus }
             {playersList.filter(p => p.status === 'folded').map(p => (
                <button
                key={p.id}
+               disabled={busy}
                onClick={() => handleSettle(p.id)}
                className="w-full flex items-center justify-between p-2 rounded-lg hover:bg-slate-800 transition-colors opacity-60"
              >
@@ -283,6 +305,7 @@ export const GameRoom: React.FC<GameRoomProps> = ({ room, me, connectionStatus }
           </div>
 
           <div className="flex flex-col gap-3">
+            {room.status === 'playing' && <p className="text-amber-400 text-sm">请先结算本轮，再退出或解散房间。</p>}
             {me.isHost ? (
               <>
                  <Button 
@@ -290,7 +313,7 @@ export const GameRoom: React.FC<GameRoomProps> = ({ room, me, connectionStatus }
                    fullWidth 
                    size="lg" 
                    onClick={handleDisband}
-                   disabled={isProcessingExit}
+                   disabled={busy || room.status === 'playing'}
                   >
                    💥 解散房间 (所有人退出)
                  </Button>
@@ -299,7 +322,7 @@ export const GameRoom: React.FC<GameRoomProps> = ({ room, me, connectionStatus }
                    fullWidth 
                    size="lg" 
                    onClick={handleLeave}
-                   disabled={isProcessingExit}
+                   disabled={busy || room.status === 'playing'}
                   >
                    👋 仅自己离开 (转移房主)
                  </Button>
@@ -310,7 +333,7 @@ export const GameRoom: React.FC<GameRoomProps> = ({ room, me, connectionStatus }
                 fullWidth 
                 size="lg" 
                 onClick={handleLeave}
-                disabled={isProcessingExit}
+                disabled={busy || room.status === 'playing'}
               >
                 退出房间
               </Button>

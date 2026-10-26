@@ -10,6 +10,7 @@ import { AlertTriangle, ExternalLink, Copy } from 'lucide-react';
 const App: React.FC = () => {
   const [gameState, setGameState] = useState<GameState>({ room: null, me: null });
   const [isLoading, setIsLoading] = useState(true);
+  const [sessionError, setSessionError] = useState('');
   const [connectionStatus, setConnectionStatus] = useState<'CONNECTING' | 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'CLOSED'>('CONNECTING');
   
   // Track subscription cleanup
@@ -28,14 +29,14 @@ const App: React.FC = () => {
         try {
           const { roomId, userId } = JSON.parse(session);
           const room = await getRoom(roomId);
-          if (room && room.players[userId]) {
+          if (room && !room.closed && room.players[userId] && !room.players[userId].removed) {
             setGameState({ room, me: room.players[userId] });
-            setupSubscription(roomId, userId);
+            setupSubscription(roomId, userId, room.revision ?? 0);
           } else {
             localStorage.removeItem(SESSION_KEY);
           }
         } catch (e) {
-          localStorage.removeItem(SESSION_KEY);
+          setSessionError('暂时无法恢复连接，你的房间身份已保留。请检查网络后重试。');
         }
       }
       setIsLoading(false);
@@ -48,7 +49,7 @@ const App: React.FC = () => {
     };
   }, []);
 
-  const setupSubscription = (roomId: string, userId: string) => {
+  const setupSubscription = (roomId: string, userId: string, revision: number) => {
     // Cleanup previous sub if exists
     if (unsubscribeRef.current) unsubscribeRef.current();
 
@@ -56,7 +57,7 @@ const App: React.FC = () => {
       roomId, 
       (updatedRoom) => {
          // 1. Room Deleted (Disbanded)
-         if (!updatedRoom) {
+         if (!updatedRoom || updatedRoom.closed) {
            alert('房间已解散');
            localStorage.removeItem(SESSION_KEY);
            setGameState({ room: null, me: null });
@@ -65,7 +66,8 @@ const App: React.FC = () => {
          }
 
          // 2. User Kicked or removed
-         if (!updatedRoom.players[userId]) {
+         if (!updatedRoom.players[userId] || updatedRoom.players[userId].removed) {
+           alert('你已离开房间或被房主移出，积分记录仍保留在房间中');
            // We might want to distinguish between "Self Left" and "Kicked", but simplest is to just reset
            // If we triggered leaveRoom ourselves, we might have already refreshed, but this catches updates from other devices/actions
            localStorage.removeItem(SESSION_KEY);
@@ -82,7 +84,8 @@ const App: React.FC = () => {
       },
       (status) => {
         setConnectionStatus(status);
-      }
+      },
+      revision
     );
 
     unsubscribeRef.current = cleanup;
@@ -92,12 +95,12 @@ const App: React.FC = () => {
     // Initial fetch
     try {
       const room = await getRoom(roomId);
-      if (room && room.players[userId]) {
+      if (room && !room.closed && room.players[userId] && !room.players[userId].removed) {
         setGameState({ room, me: room.players[userId] });
         localStorage.setItem(SESSION_KEY, JSON.stringify({ roomId, userId }));
         
         // Start Realtime Listener
-        setupSubscription(roomId, userId);
+        setupSubscription(roomId, userId, room.revision ?? 0);
       }
     } catch (e: any) {
       alert(e.message || '加入房间失败');
@@ -168,6 +171,10 @@ const App: React.FC = () => {
         </div>
       </div>
     );
+  }
+
+  if (sessionError) {
+    return <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center gap-4 p-6"><p role="alert">{sessionError}</p><button onClick={() => window.location.reload()} className="bg-emerald-700 rounded-lg px-6 py-3">重试连接</button></div>;
   }
 
   if (isLoading) {

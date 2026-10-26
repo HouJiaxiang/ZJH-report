@@ -11,6 +11,7 @@ export interface Player {
   cardStatus: CardStatus;
   isOnline: boolean;
   isHost: boolean;
+  removed?: boolean;
 }
 
 export interface LogEntry {
@@ -31,6 +32,8 @@ export interface Room {
   ante: number;
   roundCount: number;
   createdAt: number;
+  revision?: number;
+  closed?: boolean;
   players: Record<string, Player>;
   logs: LogEntry[];
 }
