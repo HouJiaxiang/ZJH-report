@@ -1,364 +1,156 @@
-import { Room, Player, LogEntry } from '../types';
+import { Room, RoomPreview, HistoryPage } from '../types';
 import { AVATARS } from '../constants';
 import { supabase } from '../lib/supabase';
+import { ensureIdentity } from './identity';
+import { SESSION_KEY } from '../constants';
 
-// Helper to generate IDs
-const generateId = () => Math.random().toString(36).substr(2, 9);
-const generateRoomCode = () => Math.floor(1000 + Math.random() * 9000).toString();
-const MAX_PLAYERS = 15;
+type Listener = (room: Room | null) => void;
+type SubscriptionStatus = 'CONNECTING' | 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'CLOSED';
+const listeners = new Map<string, Set<Listener>>();
+const publish = (id: string, room: Room | null) => listeners.get(id)?.forEach(fn => fn(room));
+const pendingKey = (id: string) => `zjh_pending_${id}`;
+const locks = new Set<string>();
+type Command = { p_room_id: string; p_actor: string; p_action: string; p_args: Record<string, unknown>; p_request_id: string };
 
-// --- DB Helpers ---
+export const getRoom = async (roomId: string): Promise<Room | null> => {
+  await ensureIdentity();
+  const { data, error } = await supabase.from('rooms').select('content').eq('id', roomId).maybeSingle();
+  if (error) throw new Error(error.message);
+  return data?.content as Room ?? null;
+};
+export const previewRoom = async (roomId: string): Promise<RoomPreview | null> => {
+  await ensureIdentity();
+  const { data, error } = await supabase.rpc('preview_room', { p_room_id: roomId });
+  if (error) throw new Error(error.message);
+  return data as RoomPreview | null;
+};
+export const hasPendingAction = (id: string) => !!localStorage.getItem(pendingKey(id));
 
-const fetchRoomData = async (roomId: string): Promise<Room | null> => {
-  const { data, error } = await supabase
-    .from('rooms')
-    .select('content')
-    .eq('id', roomId)
-    .single();
-
-  if (error || !data) return null;
-  return data.content as Room;
+export const getRoomHistory = async (roomId: string, before: string | null = null): Promise<HistoryPage> => {
+  await ensureIdentity();
+  const { data, error } = await supabase.rpc('room_history', { p_room_id: roomId, p_before: before, p_limit: 50 });
+  if (error) throw new Error(error.message);
+  return data as HistoryPage;
 };
 
-const updateRoomData = async (room: Room) => {
-  const { error } = await supabase
-    .from('rooms')
-    .update({ content: room, updated_at: new Date() })
-    .eq('id', room.id);
-  
+const send = async (command: Command): Promise<Room | null> => {
+  if (locks.has(command.p_room_id)) throw new Error('操作正在提交，请稍候');
+  locks.add(command.p_room_id);
+  try {
+    const identity = await ensureIdentity();
+    if (command.p_actor !== identity) throw new Error('本机身份已变化，不能接管原成员的操作');
+    const { data, error } = await supabase.rpc('room_action', command);
+    if (error) {
+      // Only explicit database/validation rejections are definitive. Network errors may hide a commit.
+      if (error.code && (/^[0-9A-Z]{5}$/.test(error.code) || error.code === 'PGRST202')) {
+        localStorage.removeItem(pendingKey(command.p_room_id));
+        throw new Error(error.message);
+      }
+      throw new Error('结果尚未确认，请点击“重试未确认操作”，不要重复下注');
+    }
+    localStorage.removeItem(pendingKey(command.p_room_id));
+    const room = data as Room;
+    publish(command.p_room_id, room);
+    return room;
+  } finally { locks.delete(command.p_room_id); }
+};
+
+const act = async (roomId: string, actor: string, action: string, args: Record<string, unknown> = {}) => {
+  if (hasPendingAction(roomId)) throw new Error('上一笔操作尚未确认，请先重试未确认操作');
+  const command: Command = { p_room_id: roomId, p_actor: actor, p_action: action, p_args: args, p_request_id: crypto.randomUUID() };
+  localStorage.setItem(pendingKey(roomId), JSON.stringify(command));
+  return send(command);
+};
+export const retryPendingAction = async (roomId: string) => {
+  const saved = localStorage.getItem(pendingKey(roomId));
+  if (saved) return send(JSON.parse(saved));
+};
+
+export const createRoom = async (hostName: string, ante = 5) => {
+  const nickname = hostName.trim();
+  if (!nickname || nickname.length > 20) throw new Error('昵称须为 1 到 20 个字符');
+  const userId = await ensureIdentity();
+  const key = `zjh_pending_create_${userId}`;
+  const saved = localStorage.getItem(key);
+  const args = saved ? JSON.parse(saved) : { p_request_id: crypto.randomUUID(), p_nickname: nickname, p_ante: ante, p_avatar: AVATARS[0] };
+  localStorage.setItem(key, JSON.stringify(args));
+  const { data, error } = await supabase.rpc('create_room', args);
   if (error) {
-    console.error('Error updating room:', error);
-    throw new Error('Sync failed');
+    if (error.code && /^[0-9A-Z]{5}$/.test(error.code)) localStorage.removeItem(key);
+    throw new Error(error.code ? error.message : '创建结果尚未确认，请再次点击创建以恢复同一个房间');
   }
-};
-
-// --- Service Methods ---
-
-export const createRoom = async (hostName: string, ante: number = 5): Promise<{ roomId: string; userId: string }> => {
-  let roomId = generateRoomCode();
-  // Simple check to avoid collision
-  const existing = await fetchRoomData(roomId);
-  if (existing) roomId = generateRoomCode();
-
-  const hostId = generateId();
-  const hostPlayer: Player = {
-    id: hostId,
-    nickname: hostName,
-    avatar: AVATARS[Math.floor(Math.random() * AVATARS.length)],
-    balance: 0,
-    status: 'active',
-    cardStatus: 'blind',
-    isOnline: true,
-    isHost: true,
-  };
-
-  const newRoom: Room = {
-    id: roomId,
-    hostId,
-    status: 'waiting',
-    pot: 0,
-    ante,
-    roundCount: 0,
-    createdAt: Date.now(),
-    players: { [hostId]: hostPlayer },
-    logs: [{
-      id: generateId(),
-      timestamp: Date.now(),
-      userId: 'system',
-      userName: '系统',
-      action: `${hostName} 创建了房间`,
-      type: 'system'
-    }],
-  };
-
-  const { error } = await supabase
-    .from('rooms')
-    .insert([{ id: roomId, content: newRoom }]);
-
-  if (error) throw error;
-  return { roomId, userId: hostId };
-};
-
-export const joinRoom = async (roomId: string, nickname: string): Promise<{ userId: string }> => {
-  const room = await fetchRoomData(roomId);
-  if (!room) throw new Error('房间不存在');
-
-  // Check Capacity
-  if (Object.keys(room.players).length >= MAX_PLAYERS) {
-    throw new Error(`房间已满 (限 ${MAX_PLAYERS} 人)`);
+  const room = data as Room;
+  if (room.closed) {
+    localStorage.removeItem(key);
+    throw new Error('上次创建的房间已解散，请重新创建');
   }
-
-  const userId = generateId();
-  const newPlayer: Player = {
-    id: userId,
-    nickname,
-    avatar: AVATARS[Math.floor(Math.random() * AVATARS.length)],
-    balance: 0,
-    status: 'active',
-    cardStatus: 'blind',
-    isOnline: true,
-    isHost: false,
-  };
-
-  room.players[userId] = newPlayer;
-  room.logs.push({
-    id: generateId(),
-    timestamp: Date.now(),
-    userId: userId,
-    userName: nickname,
-    action: `${nickname} 加入了房间`,
-    type: 'system'
-  });
-
-  await updateRoomData(room);
+  localStorage.setItem(SESSION_KEY, JSON.stringify({ roomId: room.id, userId }));
+  localStorage.removeItem(key);
+  return { roomId: room.id, userId };
+};
+export const joinRoom = async (roomId: string, nickname: string) => {
+  const userId = await ensureIdentity();
+  const pending = localStorage.getItem(pendingKey(roomId));
+  if (pending) {
+    const command: Command = JSON.parse(pending);
+    if (command.p_action !== 'join' || command.p_actor !== userId) throw new Error('该房间有未确认操作，请先恢复原会话');
+    await send(command);
+    localStorage.setItem(SESSION_KEY, JSON.stringify({ roomId, userId }));
+    return { userId };
+  }
+  await act(roomId, userId, 'join', { nickname, avatar: AVATARS[Math.floor(Math.random() * AVATARS.length)] });
+  localStorage.setItem(SESSION_KEY, JSON.stringify({ roomId, userId }));
   return { userId };
 };
 
-export const leaveRoom = async (roomId: string, userId: string) => {
-  const room = await fetchRoomData(roomId);
-  if (!room) return;
+export const startRound = (id: string, actor: string, round: number, ante?: number) => act(id, actor, 'start', { round, ante });
+export const placeBet = (id: string, actor: string, amount: number, round: number) => act(id, actor, 'bet', { amount, round });
+export const fold = (id: string, actor: string, round: number) => act(id, actor, 'fold', { round });
+export const lookAtCards = (id: string, actor: string, round: number) => act(id, actor, 'look', { round });
+export const settleRound = (id: string, actor: string, target: string, round: number) => act(id, actor, 'settle', { target, round });
+export const transferCredits = (id: string, actor: string, target: string, amount: number) => act(id, actor, 'transfer', { target, amount });
+export const leaveRoom = (id: string, actor: string) => act(id, actor, 'leave');
+export const disbandRoom = (id: string, actor: string) => act(id, actor, 'disband');
+export const kickPlayer = (id: string, actor: string, target: string) => act(id, actor, 'kick', { target });
+export const renamePlayer = (id: string, actor: string, nickname: string) => act(id, actor, 'rename', { nickname });
 
-  const player = room.players[userId];
-  if (!player) return; // Player already gone
-
-  // Remove player
-  delete room.players[userId];
-
-  const remainingIds = Object.keys(room.players);
-
-  // If no players left, delete the room
-  if (remainingIds.length === 0) {
-    await disbandRoom(roomId);
-    return;
-  }
-
-  // Handle Host Transfer if necessary
-  if (player.isHost) {
-    const newHostId = remainingIds[0];
-    room.hostId = newHostId;
-    room.players[newHostId].isHost = true;
-    
-    room.logs.push({
-      id: generateId(),
-      timestamp: Date.now(),
-      userId: 'system',
-      userName: '系统',
-      action: `${player.nickname} 离开，房主转移给 ${room.players[newHostId].nickname}`,
-      type: 'system'
-    });
-  } else {
-    room.logs.push({
-      id: generateId(),
-      timestamp: Date.now(),
-      userId: 'system',
-      userName: '系统',
-      action: `${player.nickname} 离开了房间`,
-      type: 'system'
-    });
-  }
-
-  await updateRoomData(room);
-};
-
-export const disbandRoom = async (roomId: string) => {
-  // Directly delete the row from DB. 
-  // The subscription 'DELETE' event will handle notifying clients.
-  const { error } = await supabase
-    .from('rooms')
-    .delete()
-    .eq('id', roomId);
-
-  if (error) throw error;
-};
-
-export const getRoom = async (roomId: string): Promise<Room | null> => {
-  return await fetchRoomData(roomId);
-};
-
-// --- Realtime Subscription ---
-
-type SubscriptionStatus = 'CONNECTING' | 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'CLOSED';
-
-export const subscribeToRoom = (
-  roomId: string, 
-  onUpdate: (room: Room | null) => void, // null means room deleted
-  onStatusChange?: (status: SubscriptionStatus) => void
-) => {
-  if (onStatusChange) onStatusChange('CONNECTING');
-
-  const channel = supabase
-    .channel(`room-${roomId}`)
-    .on(
-      'postgres_changes',
-      {
-        event: '*', // Listen to INSERT, UPDATE, DELETE
-        schema: 'public',
-        table: 'rooms',
-        filter: `id=eq.${roomId}`,
-      },
-      (payload) => {
-        if (payload.eventType === 'DELETE') {
-          // Room was deleted/disbanded
-          onUpdate(null);
-        } else if (payload.new && payload.new.content) {
-          onUpdate(payload.new.content as Room);
-        }
-      }
-    )
-    .subscribe((status) => {
-      console.log(`Realtime status for room ${roomId}:`, status);
-      if (onStatusChange) {
-        onStatusChange(status as SubscriptionStatus);
-      }
-    });
-
-  return () => {
-    supabase.removeChannel(channel);
+export const subscribeToRoom = (roomId: string, onUpdate: Listener, onStatusChange?: (status: SubscriptionStatus) => void, initialRevision = -1) => {
+  let disposed = false;
+  let refreshing = false;
+  let revision = initialRevision;
+  const accept: Listener = room => {
+    if (disposed || (room && (room.revision ?? 0) < revision)) return;
+    revision = room?.revision ?? revision;
+    onUpdate(room);
   };
-};
-
-// --- Game Actions ---
-
-export const startRound = async (roomId: string, initialAnte?: number) => {
-  const room = await fetchRoomData(roomId);
-  if (!room) return;
-
-  if (room.roundCount === 0 && initialAnte) {
-    room.ante = initialAnte;
-  }
-
-  room.status = 'playing';
-  room.roundCount += 1;
-  let potAdd = 0;
-
-  Object.values(room.players).forEach(p => {
-    p.status = 'active';
-    p.cardStatus = 'blind';
-    p.balance -= room.ante;
-    potAdd += room.ante;
-  });
-
-  room.pot += potAdd;
-  
-  const anteMsg = (room.roundCount === 1 && initialAnte) ? ` (底注设为 ${initialAnte})` : '';
-
-  room.logs.push({
-    id: generateId(),
-    timestamp: Date.now(),
-    userId: 'system',
-    userName: '系统',
-    action: `第 ${room.roundCount} 轮开始，已扣底注${anteMsg}`,
-    type: 'system'
-  });
-
-  await updateRoomData(room);
-};
-
-export const placeBet = async (roomId: string, userId: string, amount: number) => {
-  const room = await fetchRoomData(roomId);
-  if (!room) return;
-  const player = room.players[userId];
-  if (!player) return;
-
-  player.balance -= amount;
-  room.pot += amount;
-  
-  room.logs.push({
-    id: generateId(),
-    timestamp: Date.now(),
-    userId: userId,
-    userName: player.nickname,
-    action: `${player.nickname} 下注 ${amount}`,
-    amount,
-    type: 'bet'
-  });
-
-  await updateRoomData(room);
-};
-
-export const fold = async (roomId: string, userId: string) => {
-  const room = await fetchRoomData(roomId);
-  if (!room) return;
-  const player = room.players[userId];
-  if (!player) return;
-
-  player.status = 'folded';
-  
-  room.logs.push({
-    id: generateId(),
-    timestamp: Date.now(),
-    userId: userId,
-    userName: player.nickname,
-    action: `${player.nickname} 弃牌`,
-    type: 'fold'
-  });
-
-  await updateRoomData(room);
-};
-
-export const lookAtCards = async (roomId: string, userId: string) => {
-  const room = await fetchRoomData(roomId);
-  if (!room) return;
-  const player = room.players[userId];
-  if (!player) return;
-
-  if (player.cardStatus === 'blind') {
-    player.cardStatus = 'seen';
-    room.logs.push({
-      id: generateId(),
-      timestamp: Date.now(),
-      userId: userId,
-      userName: player.nickname,
-      action: `${player.nickname} 看牌`,
-      type: 'look'
+  const local = listeners.get(roomId) ?? new Set<Listener>();
+  local.add(accept);
+  listeners.set(roomId, local);
+  const refresh = async () => {
+    if (disposed || refreshing || document.visibilityState === 'hidden') return;
+    refreshing = true;
+    try { accept(await getRoom(roomId)); }
+    catch { if (!disposed) onStatusChange?.('CHANNEL_ERROR'); }
+    finally { refreshing = false; }
+  };
+  onStatusChange?.('CONNECTING');
+  const channel = supabase.channel(`room-${roomId}`)
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rooms', filter: `id=eq.${roomId}` }, payload => accept(payload.new.content as Room))
+    .subscribe(status => {
+      if (disposed) return;
+      onStatusChange?.(status === 'TIMED_OUT' ? 'CHANNEL_ERROR' : status as SubscriptionStatus);
+      if (status === 'SUBSCRIBED') void refresh();
     });
-    await updateRoomData(room);
-  }
-};
-
-export const settleRound = async (roomId: string, winnerId: string) => {
-  const room = await fetchRoomData(roomId);
-  if (!room) return;
-  const winner = room.players[winnerId];
-  if (!winner) return;
-
-  const winAmount = room.pot;
-  winner.balance += winAmount;
-  room.pot = 0;
-  room.status = 'waiting';
-
-  room.logs.push({
-    id: generateId(),
-    timestamp: Date.now(),
-    userId: winnerId,
-    userName: winner.nickname,
-    action: `${winner.nickname} 赢走池底 (${winAmount})`,
-    amount: winAmount,
-    type: 'win'
-  });
-
-  await updateRoomData(room);
-};
-
-export const transferCredits = async (roomId: string, fromId: string, toId: string, amount: number) => {
-  const room = await fetchRoomData(roomId);
-  if (!room) return;
-  const sender = room.players[fromId];
-  const receiver = room.players[toId];
-  if (!sender || !receiver) return;
-
-  sender.balance -= amount;
-  receiver.balance += amount;
-
-  room.logs.push({
-    id: generateId(),
-    timestamp: Date.now(),
-    userId: fromId,
-    userName: sender.nickname,
-    action: `${sender.nickname} 转给 ${receiver.nickname} ${amount}`,
-    amount,
-    type: 'transfer'
-  });
-
-  await updateRoomData(room);
+  const interval = window.setInterval(refresh, 15000);
+  window.addEventListener('online', refresh);
+  document.addEventListener('visibilitychange', refresh);
+  return () => {
+    disposed = true;
+    window.clearInterval(interval);
+    window.removeEventListener('online', refresh);
+    document.removeEventListener('visibilitychange', refresh);
+    local.delete(accept);
+    if (!local.size) listeners.delete(roomId);
+    void supabase.removeChannel(channel);
+  };
 };

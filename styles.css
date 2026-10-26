@@ -1,0 +1,6 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+.pb-safe { padding-bottom: max(1rem, env(safe-area-inset-bottom)); }

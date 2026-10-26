@@ -1,6 +1,6 @@
-import React, { useRef } from 'react';
+import React from 'react';
 import { LogEntry } from '../types';
-import { Crown } from 'lucide-react';
+import { Crown, ChevronRight } from 'lucide-react';
 
 interface PotDisplayProps {
   pot: number;
@@ -8,10 +8,10 @@ interface PotDisplayProps {
   roundCount: number;
   isHost?: boolean;
   onSettle?: () => void;
+  onShowHistory: () => void;
 }
 
-export const PotDisplay: React.FC<PotDisplayProps> = ({ pot, logs, roundCount, isHost, onSettle }) => {
-  const tickerRef = useRef<HTMLDivElement>(null);
+export const PotDisplay: React.FC<PotDisplayProps> = ({ pot, logs, roundCount, isHost, onSettle, onShowHistory }) => {
   const lastLog = logs[logs.length - 1];
 
   return (
@@ -39,20 +39,24 @@ export const PotDisplay: React.FC<PotDisplayProps> = ({ pot, logs, roundCount, i
       </div>
 
       {/* Ticker */}
-      <div className="w-full bg-black/40 h-8 flex items-center overflow-hidden relative">
-        <div className="absolute left-0 top-0 bottom-0 w-8 bg-gradient-to-r from-slate-950 to-transparent z-10"></div>
-        <div className="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-slate-950 to-transparent z-10"></div>
-        
-        <div className="flex-1 flex items-center justify-center text-sm font-mono text-green-400 px-4 whitespace-nowrap overflow-hidden text-ellipsis">
+      <button
+        type="button"
+        onClick={onShowHistory}
+        aria-label="查看最近50条房间动态"
+        title="查看最近50条房间动态"
+        className="w-full min-h-11 bg-black/40 hover:bg-slate-800/70 flex items-center gap-2 px-4 py-2 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-400 focus-visible:-outline-offset-2"
+      >
+        <span className="min-w-0 flex-1 truncate text-sm font-mono text-green-400">
           {lastLog ? (
-            <span className="animate-pulse">
+            <span>
               [{new Date(lastLog.timestamp).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute:'2-digit', second:'2-digit' })}] {lastLog.action}
             </span>
           ) : (
             <span className="text-slate-600">等待行动...</span>
           )}
-        </div>
-      </div>
+        </span>
+        <ChevronRight size={16} className="shrink-0 text-slate-400" aria-hidden="true" />
+      </button>
     </div>
   );
 };
