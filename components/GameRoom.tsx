@@ -175,6 +175,7 @@ export const GameRoom: React.FC<GameRoomProps> = ({ room, me, connectionStatus }
           pot={room.pot} 
           logs={room.logs} 
           roundCount={room.roundCount} 
+          onShowHistory={() => setShowHistory(true)}
           isHost={me.isHost}
           onSettle={room.status === 'playing' ? () => setShowSettleModal(true) : undefined}
         />

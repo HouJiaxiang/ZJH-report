@@ -41,7 +41,10 @@ export const RoomHistory: React.FC<{ roomId: string; onClose: () => void }> = ({
         {!loading && !error && page?.entries.length === 0 && <p className="py-6 text-center text-slate-400">暂无记录</p>}
         <ol className="divide-y divide-slate-800">
           {page?.entries.map(({ cursor, event }) => <li key={cursor} className="py-3">
-            <time className="text-xs text-slate-500" dateTime={new Date(event.timestamp).toISOString()}>{new Date(event.timestamp).toLocaleString()}</time>
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs text-slate-400">
+              <time dateTime={new Date(event.timestamp).toISOString()}>{new Date(event.timestamp).toLocaleString('zh-CN', {hour12: false})}</time>
+              {event.userName && <span className="break-all">操作人：{event.userName}</span>}
+            </div>
             <p className="text-sm text-slate-200 break-words mt-1">{event.action}</p>
           </li>)}
         </ol>

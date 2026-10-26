@@ -55,7 +55,13 @@ try {
         assert.equal(p_limit,50);
         const newest = p_before ? Number(p_before)-1 : 1600;
         const entries = emptyHistory ? [] : Array.from({length:Math.min(50,newest)},(_,i) => ({
-          cursor:String(newest-i),event:{id:String(newest-i),timestamp:1700000000000+newest-i,userId:host,userName:'成员 1',type:'bet',action:`历史操作 ${newest-i}：成员 1 下注 2`},
+          cursor:String(newest-i),event:{
+            id:String(newest-i),timestamp:1700000000000+newest-i,
+            userId:newest-i===1599 ? 'friend-1' : host,
+            userName:newest-i===1599 ? '成员 2' : '成员 1',
+            type:newest-i===1599 ? 'transfer' : newest-i===1598 ? 'system' : 'bet',
+            action:newest-i===1599 ? '成员 2 转给 成员 3 20' : newest-i===1598 ? '第 200 轮开始，已扣底注' : `历史操作 ${newest-i}：成员 1 下注 2`,
+          },
         }));
         return route.fulfill({json:{entries,nextCursor:!emptyHistory && newest>50 ? entries.at(-1).cursor : null}});
       }
@@ -76,10 +82,16 @@ try {
     assert.ok(domAfter <= domBefore+5);
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     await page.screenshot({path:`test-results/room-${viewport.width}.png`,fullPage:true});
-    await page.getByRole('button',{name:'房间记录',exact:true}).click();
+    const announcement = page.getByRole('button',{name:'查看最近50条房间动态'});
+    await announcement.click();
     const dialog = page.getByRole('dialog',{name:'房间记录'});
     await dialog.getByText('历史操作 1600：成员 1 下注 2',{exact:true}).waitFor();
     assert.equal(await dialog.locator('li').count(),50);
+    await dialog.getByText('成员 2 转给 成员 3 20',{exact:true}).waitFor();
+    const transfer = dialog.locator('li').filter({hasText:'成员 2 转给 成员 3 20'});
+    assert.equal(await transfer.getByText('操作人：成员 2',{exact:true}).count(),1);
+    const roundStart = dialog.locator('li').filter({hasText:'第 200 轮开始，已扣底注'});
+    assert.equal(await roundStart.getByText('操作人：成员 1',{exact:true}).count(),1);
     await dialog.getByRole('button',{name:'更早记录'}).click();
     await dialog.getByText('历史操作 1550：成员 1 下注 2',{exact:true}).waitFor();
     assert.equal(await dialog.locator('li').count(),50);
@@ -102,6 +114,14 @@ try {
     assert.equal(await dialog.getByRole('button',{name:'更早记录'}).isDisabled(),true);
     await dialog.getByRole('button',{name:'关闭对话框'}).click();
     assert.equal(await page.locator('[role="dialog"]').count(),0);
+    emptyHistory=false;
+    await announcement.focus();
+    await announcement.press('Enter');
+    await dialog.getByText('历史操作 1600：成员 1 下注 2',{exact:true}).waitFor();
+    await dialog.getByRole('button',{name:'关闭对话框'}).click();
+    await page.getByRole('button',{name:'房间记录',exact:true}).click();
+    await dialog.getByText('历史操作 1600：成员 1 下注 2',{exact:true}).waitFor();
+    await dialog.getByRole('button',{name:'关闭对话框'}).click();
     assert.deepEqual(errors,[]);
     console.log(JSON.stringify({viewport,updates:200,domBefore,domAfter,historyCalls,result:'passed'}));
     await context.close();

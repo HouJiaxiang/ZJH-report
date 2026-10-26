@@ -21,6 +21,7 @@
 - Create-room retries also use durable request receipts. Preview builds no longer contain a production URL/key fallback: missing configuration fails closed.
 - Room snapshots now contain only the latest event. Full history and request receipts live in the private `room_events` table, with a unique `(room_id, request_id)` index for retry lookup and a `(room_id, sequence DESC)` index for pagination. Event insert, balance/pot update, and revision increment commit or roll back together.
 - The history modal loads 50 records on demand and replaces each page rather than accumulating all records in browser memory. No history request is made during ordinary room updates. RPC and Realtime still transmit a complete **compact current snapshot**, not field-level deltas.
+- The top announcement is a keyboard-accessible button opening the same recent-history modal. Each record shows its timestamp and operator, including who started a round; bet and transfer messages retain amounts and recipients. The existing history entry remains available.
 - The third migration backfills verified protocol-2 history before compacting it, retaining original event IDs and retry receipts. Legacy rooms remain untouched. Invalid/duplicate receipts abort the migration for investigation, rather than silently discarding history.
 
 ## Production blockers
